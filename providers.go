@@ -186,3 +186,20 @@ func (s *Store) FailoverChain() ([]Model, error) {
 	}
 	return models, nil
 }
+
+// SetEnabled enables or disables a model.
+func (s *Store) SetEnabled(modelID string, enabled bool) error {
+	val := 0
+	if enabled {
+		val = 1
+	}
+	res, err := s.db.Exec("UPDATE models SET enabled = ? WHERE id = ?", val, modelID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("model %q not found", modelID)
+	}
+	return nil
+}

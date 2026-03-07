@@ -109,8 +109,8 @@ func (s *Store) RecordError(model string, errMsg string) {
 
 	now := time.Now().Unix()
 	s.db.Exec(`
-		INSERT INTO model_health (model, last_error_at, last_error, consecutive_errors)
-		VALUES (?, ?, ?, 1)
+		INSERT INTO model_health (model, last_success_at, last_success_ms, avg_response_ms, last_error_at, last_error, consecutive_errors)
+		VALUES (?, 0, 0, 0, ?, ?, 1)
 		ON CONFLICT(model) DO UPDATE SET
 			last_error_at = ?,
 			last_error = ?,

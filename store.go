@@ -33,6 +33,14 @@ type Model struct {
 	MaxTokens  int      `json:"max_tokens"`  // context window
 	InputCost  float64  `json:"input_cost"`  // per million tokens
 	OutputCost float64  `json:"output_cost"` // per million tokens
+	Enabled    bool     `json:"enabled"`     // whether this model is available for use
+	Priority   int      `json:"priority"`    // failover priority (lower = preferred, 0 = highest)
+}
+
+// ModelStatus combines model info with health data for dashboard display.
+type ModelStatus struct {
+	Model
+	Health *ModelHealth `json:"health"`
 }
 
 // Credentials holds resolved auth for a provider.
@@ -106,7 +114,9 @@ func (s *Store) migrate() error {
 			name TEXT NOT NULL,
 			max_tokens INTEGER DEFAULT 200000,
 			input_cost REAL DEFAULT 0,
-			output_cost REAL DEFAULT 0
+			output_cost REAL DEFAULT 0,
+			enabled INTEGER DEFAULT 1,
+			priority INTEGER DEFAULT 100
 		);
 
 		CREATE TABLE IF NOT EXISTS model_aliases (
@@ -136,5 +146,13 @@ func (s *Store) migrate() error {
 			PRIMARY KEY (date, agent, model)
 		);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Add columns to existing databases (safe to run multiple times)
+	s.db.Exec(`ALTER TABLE models ADD COLUMN enabled INTEGER DEFAULT 1`)
+	s.db.Exec(`ALTER TABLE models ADD COLUMN priority INTEGER DEFAULT 100`)
+
+	return nil
 }

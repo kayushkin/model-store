@@ -3,11 +3,11 @@ package modelstore
 // Seed populates the store with known providers and models.
 func (s *Store) Seed() error {
 	providers := []Provider{
-		{ID: "anthropic", Name: "Anthropic", BaseURL: "https://api.anthropic.com", AuthType: "oauth"},
-		{ID: "openai", Name: "OpenAI", BaseURL: "https://api.openai.com", AuthType: "api_key"},
-		{ID: "google", Name: "Google", BaseURL: "https://generativelanguage.googleapis.com", AuthType: "api_key"},
-		{ID: "ollama", Name: "Ollama (local)", BaseURL: "http://localhost:11434", AuthType: "none"},
-		{ID: "openrouter", Name: "OpenRouter", BaseURL: "https://openrouter.ai/api", AuthType: "api_key"},
+		{ID: "anthropic", Name: "Anthropic"},
+		{ID: "openai", Name: "OpenAI"},
+		{ID: "google", Name: "Google"},
+		{ID: "ollama", Name: "Ollama (local)"},
+		{ID: "openrouter", Name: "OpenRouter"},
 	}
 
 	for _, p := range providers {

@@ -8,15 +8,15 @@ import (
 // AddProvider registers a provider.
 func (s *Store) AddProvider(p Provider) error {
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO providers (id, name, base_url, auth_type) VALUES (?, ?, ?, ?)`,
-		p.ID, p.Name, p.BaseURL, p.AuthType,
+		`INSERT OR REPLACE INTO providers (id, name) VALUES (?, ?)`,
+		p.ID, p.Name,
 	)
 	return err
 }
 
 // Providers lists all registered providers.
 func (s *Store) Providers() ([]Provider, error) {
-	rows, err := s.db.Query(`SELECT id, name, base_url, auth_type FROM providers`)
+	rows, err := s.db.Query(`SELECT id, name FROM providers`)
 	if err != nil {
 		return nil, err
 	}
@@ -25,7 +25,7 @@ func (s *Store) Providers() ([]Provider, error) {
 	var providers []Provider
 	for rows.Next() {
 		var p Provider
-		if err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &p.AuthType); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name); err != nil {
 			continue
 		}
 		providers = append(providers, p)

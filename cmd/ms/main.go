@@ -32,10 +32,10 @@ func main() {
 				return err
 			}
 
-			fmt.Printf("%-14s %-20s %-12s %s\n", "ID", "Name", "Auth", "Base URL")
-			fmt.Println(strings.Repeat("─", 70))
+			fmt.Printf("%-14s %-20s\n", "ID", "Name")
+			fmt.Println(strings.Repeat("─", 36))
 			for _, p := range providers {
-				fmt.Printf("%-14s %-20s %-12s %s\n", p.ID, p.Name, p.AuthType, p.BaseURL)
+				fmt.Printf("%-14s %-20s\n", p.ID, p.Name)
 			}
 			return nil
 		},
@@ -96,12 +96,13 @@ func main() {
 			fmt.Printf("Context:  %d tokens\n", model.MaxTokens)
 			fmt.Printf("Cost:     $%.2f in / $%.2f out per MTok\n", model.InputCost, model.OutputCost)
 			if creds != nil {
-				fmt.Printf("Auth:     %s\n", creds.AuthType)
-				if creds.APIKey != "" {
-					fmt.Printf("Key:      %s...%s\n", creds.APIKey[:8], creds.APIKey[len(creds.APIKey)-4:])
+				fmt.Printf("Auth:     %s (credential: %s)\n", creds.AuthType, creds.ID)
+				key := ms.ActiveKey(creds)
+				if key != "" && len(key) > 12 {
+					fmt.Printf("Key:      %s...%s\n", key[:8], key[len(key)-4:])
 				}
-				if creds.Token != "" {
-					fmt.Printf("Token:    (set, expires %s)\n", creds.ExpiresAt.Format(time.RFC3339))
+				if creds.ExpiresAt > 0 {
+					fmt.Printf("Expires:  %s\n", time.UnixMilli(creds.ExpiresAt).Format(time.RFC3339))
 				}
 			}
 			return nil
@@ -183,9 +184,12 @@ func main() {
 			defer store.Close()
 
 			err = store.SetCredentials(ms.Credentials{
+				ID:       args[0] + ":default",
 				Provider: args[0],
 				AuthType: "api_key",
 				APIKey:   args[1],
+				Priority: 100,
+				Enabled:  true,
 			})
 			if err != nil {
 				return err

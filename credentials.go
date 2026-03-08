@@ -26,6 +26,9 @@ func (s *Store) SetCredentials(c Credentials) error {
 		c.ExpiresAt, c.BaseURL, c.Priority, enabled,
 		c.LastUsedAt, c.LastError, c.LastErrorAt, c.ErrorCount,
 	)
+	if err == nil {
+		s.autoSync()
+	}
 	return err
 }
 
@@ -176,6 +179,24 @@ func (s *Store) DeleteCredential(id string) error {
 	return nil
 }
 
+// SetCredentialEnabled enables or disables a credential by ID.
+func (s *Store) SetCredentialEnabled(id string, enabled bool) error {
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
+	res, err := s.db.Exec(`UPDATE credentials SET enabled = ? WHERE id = ?`, enabledInt, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("credential %q not found", id)
+	}
+	s.autoSync()
+	return nil
+}
+
 // SetCredentialHealth updates health tracking fields for a credential.
 func (s *Store) SetCredentialHealth(id string, success bool, errMsg string) {
 	now := time.Now().UnixMilli()
@@ -202,6 +223,49 @@ func ActiveKey(cred *Credentials) string {
 	default:
 		return ""
 	}
+}
+
+// CredentialsForModel returns the credentials available for a specific model.
+// Checks model_credentials bindings first; if none, falls back to all provider-level credentials.
+// Does NOT filter by enabled — returns all so the dashboard can show full picture.
+func (s *Store) CredentialsForModel(modelID string) ([]Credentials, error) {
+	// First check for model-specific bindings
+	rows, err := s.db.Query(`
+		SELECT c.id, c.provider, c.label, c.auth_type, c.api_key, c.token, c.refresh_token,
+		       c.expires_at, c.base_url, c.priority, c.enabled, c.last_used_at,
+		       c.last_error, c.last_error_at, c.error_count, c.created_at
+		FROM credentials c
+		JOIN model_credentials mc ON c.id = mc.credential_id
+		WHERE mc.model_id = ?
+		ORDER BY mc.priority ASC, c.priority ASC`,
+		modelID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var creds []Credentials
+	for rows.Next() {
+		c, scanErr := scanCredential(rows)
+		if scanErr != nil {
+			continue
+		}
+		creds = append(creds, *c)
+	}
+	rows.Close()
+
+	if len(creds) > 0 {
+		return creds, nil
+	}
+
+	// Fall back to provider-level: look up the model's provider, then list all creds for it
+	var provider string
+	err = s.db.QueryRow(`SELECT provider FROM models WHERE id = ?`, modelID).Scan(&provider)
+	if err != nil {
+		return nil, fmt.Errorf("model %q not found", modelID)
+	}
+
+	return s.ListCredentials(provider)
 }
 
 // BindModelCredential creates a model-specific credential binding.
@@ -240,6 +304,9 @@ func (s *Store) refreshOAuthCredential(c *Credentials) error {
 	// Update DB
 	_, err = s.db.Exec(`UPDATE credentials SET token = ?, refresh_token = ?, expires_at = ?, last_error = '', error_count = 0 WHERE id = ?`,
 		c.Token, c.RefreshToken, c.ExpiresAt, c.ID)
+	if err == nil {
+		s.autoSync()
+	}
 	return err
 }
 

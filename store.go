@@ -12,9 +12,10 @@ import (
 
 // Store is the central model/auth/usage registry.
 type Store struct {
-	db        *sql.DB
-	path      string
+	db             *sql.DB
+	path           string
 	oauthProviders map[string]OAuthProvider
+	syncPath       string // if set, auto-sync to auth-profiles.json on credential changes
 }
 
 // OAuthProvider is the interface for refreshing OAuth tokens.
@@ -126,6 +127,25 @@ func (s *Store) Close() error {
 // RegisterOAuthProvider registers a provider for OAuth token refresh.
 func (s *Store) RegisterOAuthProvider(p OAuthProvider) {
 	s.oauthProviders[p.ID()] = p
+}
+
+// EnableAuthProfileSync sets a path to auto-sync credentials to on changes.
+// Pass "" to use the default OpenClaw auth-profiles.json path.
+func (s *Store) EnableAuthProfileSync(path string) {
+	if path == "" {
+		path = DefaultAuthProfilesPath()
+	}
+	s.syncPath = path
+}
+
+// autoSync syncs to auth-profiles.json if sync is enabled. Best-effort, errors logged to stderr.
+func (s *Store) autoSync() {
+	if s.syncPath == "" {
+		return
+	}
+	if err := s.SyncToAuthProfiles(s.syncPath); err != nil {
+		fmt.Fprintf(os.Stderr, "[model-store] sync to auth-profiles failed: %v\n", err)
+	}
 }
 
 func (s *Store) migrate() error {

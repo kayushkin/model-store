@@ -93,12 +93,14 @@ func (s *Store) RecordSuccess(model string, durationMs int64) {
 
 	now := time.Now().Unix()
 	s.db.Exec(`
-		INSERT INTO model_health (model, last_success_at, last_success_ms, avg_response_ms, consecutive_errors)
-		VALUES (?, ?, ?, ?, 0)
+		INSERT INTO model_health (model, last_success_at, last_success_ms, avg_response_ms, last_error_at, last_error, consecutive_errors)
+		VALUES (?, ?, ?, ?, 0, '', 0)
 		ON CONFLICT(model) DO UPDATE SET
 			last_success_at = ?,
 			last_success_ms = ?,
 			avg_response_ms = ?,
+			last_error_at = 0,
+			last_error = '',
 			consecutive_errors = 0
 	`, model, now, durationMs, avg, now, durationMs, avg)
 }

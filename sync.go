@@ -140,3 +140,95 @@ func (s *Store) SyncToAuthProfiles(path string) error {
 
 	return os.WriteFile(path, data, 0600)
 }
+
+// SyncFromAuthProfiles reads auth-profiles.json and updates OAuth/token credentials
+// in the model-store DB. Only updates credentials that already exist (by matching
+// provider + auth_type). This is the reverse of SyncToAuthProfiles.
+func (s *Store) SyncFromAuthProfiles(path string) (int, error) {
+	if path == "" {
+		path = DefaultAuthProfilesPath()
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("reading auth profiles: %w", err)
+	}
+
+	var store authProfileStore
+	if err := json.Unmarshal(data, &store); err != nil {
+		return 0, fmt.Errorf("parsing auth profiles: %w", err)
+	}
+
+	// Get existing credentials from DB
+	existing, err := s.ListCredentials("")
+	if err != nil {
+		return 0, fmt.Errorf("listing credentials: %w", err)
+	}
+
+	updated := 0
+
+	for profileID, profile := range store.Profiles {
+		if profile == nil {
+			continue
+		}
+
+		// Try to match by profile ID first (e.g. "anthropic:max-oauth")
+		var target *Credentials
+		for i := range existing {
+			if existing[i].ID == profileID {
+				target = &existing[i]
+				break
+			}
+		}
+
+		// If no exact ID match, match OAuth profiles to existing OAuth creds by provider
+		if target == nil && profile.Type == "oauth" {
+			for i := range existing {
+				if existing[i].Provider == profile.Provider && existing[i].AuthType == "oauth" {
+					target = &existing[i]
+					break
+				}
+			}
+		}
+
+		if target == nil {
+			continue // don't create new credentials, only update existing
+		}
+
+		// Check if the auth-profiles version is newer (different token)
+		switch profile.Type {
+		case "oauth":
+			if profile.Access != "" && profile.Access != target.Token {
+				target.Token = profile.Access
+				if profile.Refresh != "" {
+					target.RefreshToken = profile.Refresh
+				}
+				target.ExpiresAt = profile.Expires
+				target.ErrorCount = 0
+				target.LastError = ""
+				if err := s.SetCredentials(*target); err != nil {
+					continue
+				}
+				updated++
+			}
+		case "token":
+			if target.AuthType == "oauth" {
+				// Skip manual/token profiles for OAuth credentials
+				// (these are derived from OAuth, not the source of truth)
+				continue
+			}
+			if profile.Token != "" && profile.Token != target.Token {
+				target.Token = profile.Token
+				target.ExpiresAt = profile.Expires
+				target.ErrorCount = 0
+				target.LastError = ""
+				if err := s.SetCredentials(*target); err != nil {
+					continue
+				}
+				updated++
+			}
+		}
+	}
+
+	return updated, nil
+}

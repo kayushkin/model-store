@@ -35,6 +35,18 @@ func main() {
 	}
 	store.Close()
 
+	// Helper: open store with OAuth providers registered (for auto-refresh)
+	openStore := func() (*modelstore.Store, error) {
+		s, err := modelstore.Open(*dbPath)
+		if err != nil {
+			return nil, err
+		}
+		s.RegisterDefaultOAuthProviders()
+		s.EnableAuthProfileSync("")
+		return s, nil
+	}
+	_ = openStore // used below
+
 	mux.HandleFunc("/api/models", func(w http.ResponseWriter, r *http.Request) {
 		corsHeaders(w)
 		if r.Method == http.MethodOptions {
@@ -308,6 +320,37 @@ func main() {
 		}
 
 		jsonResponse(w, map[string]any{"ok": true, "id": req.ID, "enabled": req.Enabled})
+	})
+
+	mux.HandleFunc("/api/credentials/sync", func(w http.ResponseWriter, r *http.Request) {
+		corsHeaders(w)
+		if r.Method == http.MethodOptions {
+			return
+		}
+		if r.Method != http.MethodPost {
+			httpError(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		store, err := modelstore.Open(*dbPath)
+		if err != nil {
+			httpError(w, "failed to open model store", http.StatusInternalServerError)
+			return
+		}
+		defer store.Close()
+		store.RegisterDefaultOAuthProviders()
+		store.EnableAuthProfileSync("")
+
+		updated, err := store.SyncFromAuthProfiles("")
+		if err != nil {
+			httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Also sync back to auth-profiles to keep OpenClaw fresh
+		store.SyncToAuthProfiles("")
+
+		jsonResponse(w, map[string]any{"ok": true, "updated": updated})
 	})
 
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {

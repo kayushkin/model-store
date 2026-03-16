@@ -284,6 +284,20 @@ func (s *Store) UnbindModelCredential(modelID, credentialID string) error {
 }
 
 // refreshOAuthCredential attempts to refresh an expired OAuth credential using registered providers.
+// RefreshOAuthCredential refreshes an OAuth credential by ID.
+func (s *Store) RefreshOAuthCredential(id string) error {
+	creds, err := s.ListCredentials("")
+	if err != nil {
+		return err
+	}
+	for _, c := range creds {
+		if c.ID == id {
+			return s.refreshOAuthCredential(&c)
+		}
+	}
+	return fmt.Errorf("credential %s not found", id)
+}
+
 func (s *Store) refreshOAuthCredential(c *Credentials) error {
 	p, ok := s.oauthProviders[c.Provider]
 	if !ok {

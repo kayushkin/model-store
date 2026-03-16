@@ -45,7 +45,36 @@ func main() {
 		s.EnableAuthProfileSync("")
 		return s, nil
 	}
-	_ = openStore // used below
+	// Background OAuth token health check — refresh tokens before they expire.
+	go func() {
+		// Initial delay, then check every 30 minutes.
+		time.Sleep(10 * time.Second)
+		for {
+			s, err := openStore()
+			if err != nil {
+				log.Printf("[oauth-refresh] failed to open store: %v", err)
+			} else {
+				creds, _ := s.ListCredentials("")
+				now := time.Now().UnixMilli()
+				for _, c := range creds {
+					if c.AuthType != "oauth" || !c.Enabled {
+						continue
+					}
+					// Refresh if expired or expiring within 1 hour
+					if c.ExpiresAt > 0 && c.ExpiresAt-now < 3600_000 {
+						log.Printf("[oauth-refresh] %s expires in %dm, refreshing...", c.ID, (c.ExpiresAt-now)/60_000)
+						if err := s.RefreshOAuthCredential(c.ID); err != nil {
+							log.Printf("[oauth-refresh] %s refresh failed: %v", c.ID, err)
+						} else {
+							log.Printf("[oauth-refresh] %s refreshed successfully", c.ID)
+						}
+					}
+				}
+				s.Close()
+			}
+			time.Sleep(30 * time.Minute)
+		}
+	}()
 
 	mux.HandleFunc("/api/models", func(w http.ResponseWriter, r *http.Request) {
 		corsHeaders(w)

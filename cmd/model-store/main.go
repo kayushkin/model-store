@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kayushkin/bus"
+	"github.com/kayushkin/bus/messages"
 	modelstore "github.com/kayushkin/model-store"
 )
 
@@ -386,6 +388,74 @@ func main() {
 		corsHeaders(w)
 		jsonResponse(w, map[string]any{"status": "ok"})
 	})
+
+	// NATS handlers for usage queries
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		natsURL = "nats://localhost:4222"
+	}
+	natsClient, natsErr := bus.Connect(bus.Options{URL: natsURL, Name: "model-store"})
+	if natsErr != nil {
+		log.Printf("warning: NATS unavailable: %v", natsErr)
+	} else {
+		defer natsClient.Close()
+
+		natsClient.Reply("usage.query", func(data []byte) (any, error) {
+			var req messages.UsageQuery
+			if err := json.Unmarshal(data, &req); err != nil {
+				return messages.APIResponse{OK: false, Error: err.Error()}, nil
+			}
+
+			s, err := openStore()
+			if err != nil {
+				return messages.APIResponse{OK: false, Error: err.Error()}, nil
+			}
+			defer s.Close()
+
+			queryPeriod := func(days int) []messages.UsageEntry {
+				// Query each day in range
+				var entries []messages.UsageEntry
+				for d := 0; d < days; d++ {
+					date := time.Now().AddDate(0, 0, -d).Format("2006-01-02")
+					records, err := s.Usage(req.Agent, date)
+					if err != nil {
+						continue
+					}
+					for _, r := range records {
+						entries = append(entries, messages.UsageEntry{
+							Date:         r.Date,
+							Agent:        r.Agent,
+							Model:        r.Model,
+							Provider:     r.Provider,
+							InputTokens:  r.InputTokens,
+							OutputTokens: r.OutputTokens,
+							Requests:     r.Requests,
+							CostUSD:      r.CostUSD,
+						})
+					}
+				}
+				if entries == nil {
+					entries = []messages.UsageEntry{}
+				}
+				return entries
+			}
+
+			days := req.Days
+			if days <= 0 {
+				// Return day/week/month
+				resp := messages.UsageResponse{
+					Day:   queryPeriod(1),
+					Week:  queryPeriod(7),
+					Month: queryPeriod(30),
+				}
+				return messages.APIResponse{OK: true, Data: resp}, nil
+			}
+
+			entries := queryPeriod(days)
+			return messages.APIResponse{OK: true, Data: entries}, nil
+		})
+		log.Printf("usage.query NATS handler registered")
+	}
 
 	server := &http.Server{Addr: *addr, Handler: mux}
 

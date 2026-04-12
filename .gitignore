@@ -1,6 +1,6 @@
 # Binaries
 model-store
-ms
+/ms
 *.exe
 *.dll
 *.so

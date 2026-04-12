@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/kayushkin/aiauth"
 	ms "github.com/kayushkin/model-store"
 	"github.com/spf13/cobra"
 )
@@ -122,6 +123,65 @@ func main() {
 			return nil
 		},
 	})
+
+	// sync
+	syncCmd := &cobra.Command{
+		Use:   "sync [provider...]",
+		Short: "Fetch models from provider APIs (anthropic, openai, google)",
+		Long: `Fetches the live model list from each provider's API and upserts into the store.
+Existing models are updated (name, context window) but user-set fields (enabled, priority, cost, aliases) are preserved.
+New models are added with default priority 100 and estimated costs.
+
+Requires API keys via environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY) or aiauth profiles.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := ms.Open("")
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			providers := args
+			if len(providers) == 0 {
+				providers = []string{"anthropic", "openai", "google"}
+			}
+
+			envVars := map[string]string{
+				"anthropic": "ANTHROPIC_API_KEY",
+				"openai":    "OPENAI_API_KEY",
+				"google":    "GOOGLE_API_KEY",
+			}
+
+			authStore := aiauth.DefaultStore()
+
+			for _, p := range providers {
+				envName, ok := envVars[p]
+				if !ok {
+					fmt.Printf("%-10s skipped (no sync support)\n", p)
+					continue
+				}
+				// Try env var first, then aiauth
+				key := os.Getenv(envName)
+				if key == "" {
+					resolved, err := authStore.ResolveKey(p)
+					if err == nil && resolved != "" {
+						key = resolved
+					}
+				}
+				if key == "" {
+					fmt.Printf("%-10s skipped (no credentials: set %s or add aiauth profile)\n", p, envName)
+					continue
+				}
+				result, err := store.SyncProvider(p, key)
+				if err != nil {
+					fmt.Printf("%-10s error: %v\n", p, err)
+					continue
+				}
+				fmt.Printf("%-10s +%d added, %d updated\n", p, result.Added, result.Updated)
+			}
+			return nil
+		},
+	}
+	root.AddCommand(syncCmd)
 
 	// enable/disable
 	root.AddCommand(&cobra.Command{

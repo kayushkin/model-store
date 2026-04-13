@@ -1,0 +1,11 @@
+[Unit]
+Description=Model store API
+After=network.target
+
+[Service]
+ExecStart=/home/kayushkincom/bin/model-store --addr :8155
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

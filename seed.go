@@ -53,6 +53,18 @@ func (s *Store) Seed() error {
 			Enabled: false, Priority: 60},
 
 		// OpenAI
+		{ID: "gpt-5", Provider: "openai", Name: "GPT-5",
+			Aliases: []string{"5"}, MaxTokens: 400000, InputCost: 1.25, OutputCost: 10.0,
+			Enabled: true, Priority: 30},
+		{ID: "gpt-5-codex", Provider: "openai", Name: "GPT-5 Codex",
+			Aliases: []string{"5-codex", "codex"}, MaxTokens: 400000, InputCost: 1.25, OutputCost: 10.0,
+			Enabled: true, Priority: 35},
+		{ID: "gpt-5-mini", Provider: "openai", Name: "GPT-5 Mini",
+			Aliases: []string{"5-mini"}, MaxTokens: 400000, InputCost: 0.25, OutputCost: 2.00,
+			Enabled: true, Priority: 38},
+		{ID: "gpt-5-nano", Provider: "openai", Name: "GPT-5 Nano",
+			Aliases: []string{"5-nano"}, MaxTokens: 400000, InputCost: 0.05, OutputCost: 0.40,
+			Enabled: true, Priority: 39},
 		{ID: "o3", Provider: "openai", Name: "o3",
 			MaxTokens: 200000, InputCost: 10.0, OutputCost: 40.0,
 			Enabled: true, Priority: 40},

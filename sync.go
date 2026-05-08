@@ -169,7 +169,7 @@ func openaiRelevant(id string) bool {
 		return false
 	}
 	// Include known model families
-	for _, prefix := range []string{"gpt-4", "o1", "o3", "o4", "chatgpt-4o"} {
+	for _, prefix := range []string{"gpt-4", "gpt-5", "o1", "o3", "o4", "chatgpt-"} {
 		if strings.HasPrefix(id, prefix) {
 			return true
 		}
@@ -286,6 +286,14 @@ func guessOpenAICost(id string) (maxTokens int, input, output float64) {
 		return 200000, 15.0, 60.0
 	case strings.HasPrefix(id, "o4-mini"):
 		return 200000, 1.10, 4.40
+	case strings.HasPrefix(id, "gpt-5-nano"):
+		return 400000, 0.05, 0.40
+	case strings.HasPrefix(id, "gpt-5-mini"):
+		return 400000, 0.25, 2.00
+	case strings.HasPrefix(id, "gpt-5-codex"):
+		return 400000, 1.25, 10.0
+	case strings.HasPrefix(id, "gpt-5"):
+		return 400000, 1.25, 10.0
 	case strings.HasPrefix(id, "gpt-4.1-nano"):
 		return 1047576, 0.10, 0.40
 	case strings.HasPrefix(id, "gpt-4.1-mini"):

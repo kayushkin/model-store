@@ -1,8 +1,6 @@
 package modelstore
 
 import (
-	"database/sql"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,314 +20,322 @@ func tempStore(t *testing.T) *Store {
 	return s
 }
 
-func TestMigration(t *testing.T) {
-	// Create a DB with old schema
-	path := filepath.Join(t.TempDir(), "old.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
+// seedProviderWithModels registers one provider plus the given models.
+func seedProviderWithModels(t *testing.T, s *Store, provider string, models ...Model) {
+	t.Helper()
+	if err := s.AddProvider(Provider{ID: provider, Name: provider}); err != nil {
 		t.Fatal(err)
 	}
-
-	// Old schema
-	_, err = db.Exec(`
-		CREATE TABLE providers (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			base_url TEXT,
-			auth_type TEXT NOT NULL DEFAULT 'api_key'
-		);
-		CREATE TABLE models (
-			id TEXT PRIMARY KEY,
-			provider TEXT NOT NULL,
-			name TEXT NOT NULL,
-			max_tokens INTEGER DEFAULT 200000,
-			input_cost REAL DEFAULT 0,
-			output_cost REAL DEFAULT 0,
-			enabled INTEGER DEFAULT 1,
-			priority INTEGER DEFAULT 100
-		);
-		CREATE TABLE model_aliases (
-			alias TEXT PRIMARY KEY,
-			model_id TEXT NOT NULL
-		);
-		CREATE TABLE credentials (
-			provider TEXT PRIMARY KEY,
-			auth_type TEXT NOT NULL,
-			api_key TEXT,
-			token TEXT,
-			refresh_token TEXT,
-			expires_at INTEGER,
-			base_url TEXT
-		);
-		CREATE TABLE usage (
-			date TEXT NOT NULL,
-			agent TEXT NOT NULL,
-			model TEXT NOT NULL,
-			provider TEXT NOT NULL,
-			input_tokens INTEGER DEFAULT 0,
-			output_tokens INTEGER DEFAULT 0,
-			requests INTEGER DEFAULT 0,
-			cost_usd REAL DEFAULT 0,
-			PRIMARY KEY (date, agent, model)
-		);
-
-		INSERT INTO providers VALUES ('anthropic', 'Anthropic', 'https://api.anthropic.com', 'oauth');
-		INSERT INTO credentials VALUES ('anthropic', 'api_key', 'sk-test-key', '', '', 0, 'https://api.anthropic.com');
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
-
-	// Open with new code — should migrate
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	// Verify migrated credential
-	creds, err := s.ListCredentials("anthropic")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(creds) != 1 {
-		t.Fatalf("expected 1 migrated credential, got %d", len(creds))
-	}
-	c := creds[0]
-	if c.ID != "anthropic:default" {
-		t.Errorf("expected id 'anthropic:default', got %q", c.ID)
-	}
-	if c.APIKey != "sk-test-key" {
-		t.Errorf("expected api_key 'sk-test-key', got %q", c.APIKey)
-	}
-	if c.AuthType != "api_key" {
-		t.Errorf("expected auth_type 'api_key', got %q", c.AuthType)
-	}
-
-	// Verify old table was renamed
-	var cnt int
-	s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='credentials_old'`).Scan(&cnt)
-	if cnt != 1 {
-		t.Error("expected credentials_old table to exist")
-	}
-}
-
-func TestResolveMultipleCredentials(t *testing.T) {
-	s := tempStore(t)
-	s.AddProvider(Provider{ID: "anthropic", Name: "Anthropic"})
-
-	// Add two credentials with different priorities
-	s.SetCredentials(Credentials{
-		ID: "anthropic:backup", Provider: "anthropic", AuthType: "api_key",
-		APIKey: "sk-backup", Priority: 200, Enabled: true,
-	})
-	s.SetCredentials(Credentials{
-		ID: "anthropic:primary", Provider: "anthropic", AuthType: "api_key",
-		APIKey: "sk-primary", Priority: 50, Enabled: true,
-	})
-
-	c, err := s.Resolve("anthropic")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.ID != "anthropic:primary" {
-		t.Errorf("expected primary (priority 50), got %q", c.ID)
-	}
-	if ActiveKey(c) != "sk-primary" {
-		t.Errorf("expected sk-primary, got %q", ActiveKey(c))
-	}
-
-	// Disable primary — should fall back to backup
-	s.db.Exec(`UPDATE credentials SET enabled = 0 WHERE id = 'anthropic:primary'`)
-	c, err = s.Resolve("anthropic")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.ID != "anthropic:backup" {
-		t.Errorf("expected backup after disabling primary, got %q", c.ID)
-	}
-}
-
-func TestResolveForModel(t *testing.T) {
-	s := tempStore(t)
-	s.AddProvider(Provider{ID: "anthropic", Name: "Anthropic"})
-	s.AddModel(Model{ID: "claude-test", Provider: "anthropic", Name: "Test", Enabled: true, Priority: 10})
-
-	// Provider-level credential
-	s.SetCredentials(Credentials{
-		ID: "anthropic:default", Provider: "anthropic", AuthType: "api_key",
-		APIKey: "sk-provider", Priority: 100, Enabled: true,
-	})
-	// Model-specific credential
-	s.SetCredentials(Credentials{
-		ID: "anthropic:special", Provider: "anthropic", AuthType: "api_key",
-		APIKey: "sk-special", Priority: 100, Enabled: true,
-	})
-	s.BindModelCredential("claude-test", "anthropic:special", 50)
-
-	c, m, err := s.ResolveForModel("claude-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m.ID != "claude-test" {
-		t.Errorf("expected model claude-test, got %q", m.ID)
-	}
-	if c.ID != "anthropic:special" {
-		t.Errorf("expected model-specific credential, got %q", c.ID)
-	}
-
-	// Remove binding — should fall back to provider
-	s.UnbindModelCredential("claude-test", "anthropic:special")
-	c, _, err = s.ResolveForModel("claude-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.ID != "anthropic:default" {
-		t.Errorf("expected provider-level credential, got %q", c.ID)
-	}
-}
-
-// mockOAuthProvider implements OAuthProvider for testing.
-type mockOAuthProvider struct {
-	id        string
-	callCount int
-	shouldErr bool
-}
-
-func (m *mockOAuthProvider) ID() string { return m.id }
-
-func (m *mockOAuthProvider) RefreshToken(access, refresh string) (string, string, int64, error) {
-	m.callCount++
-	if m.shouldErr {
-		return "", "", 0, fmt.Errorf("refresh failed")
-	}
-	newExpires := time.Now().Add(time.Hour).UnixMilli()
-	return "new-access-token", refresh, newExpires, nil
-}
-
-func TestOAuthRefresh(t *testing.T) {
-	s := tempStore(t)
-	s.AddProvider(Provider{ID: "anthropic", Name: "Anthropic"})
-
-	mock := &mockOAuthProvider{id: "anthropic"}
-	s.RegisterOAuthProvider(mock)
-
-	s.SetCredentials(Credentials{
-		ID: "anthropic:oauth", Provider: "anthropic", AuthType: "oauth",
-		Token: "old-token", RefreshToken: "refresh-token",
-		ExpiresAt: time.Now().Add(-time.Hour).UnixMilli(), // expired
-		Priority: 100, Enabled: true,
-	})
-
-	c, err := s.Resolve("anthropic")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mock.callCount != 1 {
-		t.Errorf("expected 1 refresh call, got %d", mock.callCount)
-	}
-	if c.Token != "new-access-token" {
-		t.Errorf("expected refreshed token, got %q", c.Token)
-	}
-
-	// Verify DB was updated
-	creds, _ := s.ListCredentials("anthropic")
-	if creds[0].Token != "new-access-token" {
-		t.Error("DB not updated after refresh")
-	}
-}
-
-func TestOAuthRefreshFallback(t *testing.T) {
-	s := tempStore(t)
-	s.AddProvider(Provider{ID: "anthropic", Name: "Anthropic"})
-
-	mock := &mockOAuthProvider{id: "anthropic", shouldErr: true}
-	s.RegisterOAuthProvider(mock)
-
-	// Expired OAuth + working API key backup
-	s.SetCredentials(Credentials{
-		ID: "anthropic:oauth", Provider: "anthropic", AuthType: "oauth",
-		Token: "expired-token", RefreshToken: "refresh",
-		ExpiresAt: time.Now().Add(-time.Hour).UnixMilli(),
-		Priority: 50, Enabled: true,
-	})
-	s.SetCredentials(Credentials{
-		ID: "anthropic:api", Provider: "anthropic", AuthType: "api_key",
-		APIKey: "sk-backup", Priority: 100, Enabled: true,
-	})
-
-	c, err := s.Resolve("anthropic")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Should fall back to API key since OAuth refresh failed
-	if c.ID != "anthropic:api" {
-		t.Errorf("expected fallback to api key, got %q", c.ID)
-	}
-}
-
-func TestDeleteCredential(t *testing.T) {
-	s := tempStore(t)
-	s.AddProvider(Provider{ID: "test", Name: "Test"})
-	s.SetCredentials(Credentials{
-		ID: "test:1", Provider: "test", AuthType: "api_key",
-		APIKey: "key1", Priority: 100, Enabled: true,
-	})
-
-	err := s.DeleteCredential("test:1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	creds, _ := s.ListCredentials("test")
-	if len(creds) != 0 {
-		t.Errorf("expected 0 credentials after delete, got %d", len(creds))
-	}
-
-	err = s.DeleteCredential("nonexistent")
-	if err == nil {
-		t.Error("expected error deleting nonexistent credential")
-	}
-}
-
-func TestCredentialHealth(t *testing.T) {
-	s := tempStore(t)
-	s.AddProvider(Provider{ID: "test", Name: "Test"})
-	s.SetCredentials(Credentials{
-		ID: "test:1", Provider: "test", AuthType: "api_key",
-		APIKey: "key1", Priority: 100, Enabled: true,
-	})
-
-	s.SetCredentialHealth("test:1", false, "timeout")
-	creds, _ := s.ListCredentials("test")
-	if creds[0].ErrorCount != 1 {
-		t.Errorf("expected error_count 1, got %d", creds[0].ErrorCount)
-	}
-
-	s.SetCredentialHealth("test:1", true, "")
-	creds, _ = s.ListCredentials("test")
-	if creds[0].ErrorCount != 0 {
-		t.Errorf("expected error_count 0 after success, got %d", creds[0].ErrorCount)
-	}
-}
-
-func TestActiveKey(t *testing.T) {
-	tests := []struct {
-		cred *Credentials
-		want string
-	}{
-		{&Credentials{AuthType: "api_key", APIKey: "sk-test"}, "sk-test"},
-		{&Credentials{AuthType: "oauth", Token: "oat-token"}, "oat-token"},
-		{&Credentials{AuthType: "token", Token: "bearer-token"}, "bearer-token"},
-		{&Credentials{AuthType: "none"}, ""},
-		{nil, ""},
-	}
-	for _, tt := range tests {
-		got := ActiveKey(tt.cred)
-		if got != tt.want {
-			t.Errorf("ActiveKey(%v) = %q, want %q", tt.cred, got, tt.want)
+	for _, m := range models {
+		if err := s.AddModel(m); err != nil {
+			t.Fatalf("AddModel(%s): %v", m.ID, err)
 		}
+	}
+}
+
+func TestProvidersAndModels(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "claude-b", Provider: "anthropic", Name: "B", Enabled: true, Priority: 20},
+		Model{ID: "claude-a", Provider: "anthropic", Name: "A", Enabled: true, Priority: 10, Aliases: []string{"sonnet"}},
+	)
+
+	providers, err := s.Providers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(providers) != 1 || providers[0].ID != "anthropic" {
+		t.Fatalf("expected the one anthropic provider, got %+v", providers)
+	}
+
+	models, err := s.Models("anthropic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(models))
+	}
+	// Models are ordered by priority, not insertion order.
+	if models[0].ID != "claude-a" || models[1].ID != "claude-b" {
+		t.Errorf("expected priority order [claude-a claude-b], got [%s %s]", models[0].ID, models[1].ID)
+	}
+	if len(models[0].Aliases) != 1 || models[0].Aliases[0] != "sonnet" {
+		t.Errorf("expected alias sonnet to round-trip, got %v", models[0].Aliases)
+	}
+
+	// A provider with nothing registered has no models.
+	other, err := s.Models("openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) != 0 {
+		t.Errorf("expected no models for unregistered provider, got %d", len(other))
+	}
+}
+
+func TestResolveModelByIDAndAlias(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "claude-test", Provider: "anthropic", Name: "Test", Enabled: true, Priority: 10, Aliases: []string{"sonnet", "claude-sonnet"}},
+	)
+
+	byID, err := s.ResolveModel("claude-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byID.ID != "claude-test" || byID.Provider != "anthropic" {
+		t.Errorf("resolve by id: got %+v", byID)
+	}
+	if !byID.Enabled {
+		t.Error("resolve by id: expected Enabled to survive the round-trip")
+	}
+
+	for _, alias := range []string{"sonnet", "claude-sonnet"} {
+		byAlias, err := s.ResolveModel(alias)
+		if err != nil {
+			t.Fatalf("resolve alias %q: %v", alias, err)
+		}
+		if byAlias.ID != "claude-test" {
+			t.Errorf("resolve alias %q: expected claude-test, got %q", alias, byAlias.ID)
+		}
+	}
+
+	if _, err := s.ResolveModel("no-such-model"); err == nil {
+		t.Error("expected an error resolving an unknown model, got nil")
+	}
+}
+
+func TestProviderFor(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "openai",
+		Model{ID: "gpt-test", Provider: "openai", Name: "GPT", Enabled: true, Priority: 10, Aliases: []string{"gpt"}},
+	)
+
+	// ProviderFor resolves through aliases, since it delegates to ResolveModel.
+	for _, ref := range []string{"gpt-test", "gpt"} {
+		provider, err := s.ProviderFor(ref)
+		if err != nil {
+			t.Fatalf("ProviderFor(%q): %v", ref, err)
+		}
+		if provider != "openai" {
+			t.Errorf("ProviderFor(%q) = %q, want openai", ref, provider)
+		}
+	}
+
+	if _, err := s.ProviderFor("no-such-model"); err == nil {
+		t.Error("expected an error for an unknown model, got nil")
+	}
+}
+
+func TestSetEnabled(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "claude-test", Provider: "anthropic", Name: "Test", Enabled: true, Priority: 10},
+	)
+
+	if err := s.SetEnabled("claude-test", false); err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.ResolveModel("claude-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Enabled {
+		t.Error("expected model to be disabled")
+	}
+
+	if err := s.SetEnabled("claude-test", true); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = s.ResolveModel("claude-test")
+	if !m.Enabled {
+		t.Error("expected model to be re-enabled")
+	}
+
+	// Toggling a model that doesn't exist is an error, not a silent no-op.
+	if err := s.SetEnabled("no-such-model", false); err == nil {
+		t.Error("expected an error for an unknown model, got nil")
+	}
+}
+
+func TestFailoverChainOrdersByPriorityAndSkipsDisabled(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "third", Provider: "anthropic", Name: "Third", Enabled: true, Priority: 30},
+		Model{ID: "first", Provider: "anthropic", Name: "First", Enabled: true, Priority: 10},
+		Model{ID: "second", Provider: "anthropic", Name: "Second", Enabled: true, Priority: 20},
+		Model{ID: "off", Provider: "anthropic", Name: "Disabled", Enabled: false, Priority: 1},
+	)
+
+	chain, err := s.FailoverChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"first", "second", "third"}
+	if len(chain) != len(want) {
+		t.Fatalf("expected %d models in the chain, got %d", len(want), len(chain))
+	}
+	for i, id := range want {
+		if chain[i].ID != id {
+			t.Errorf("chain[%d] = %q, want %q", i, chain[i].ID, id)
+		}
+	}
+
+	// The disabled model sorts first by priority, so its absence proves the
+	// enabled filter runs rather than the ordering hiding it.
+	for _, m := range chain {
+		if m.ID == "off" {
+			t.Error("disabled model must not appear in the failover chain")
+		}
+	}
+}
+
+func TestAllModelsWithStatusJoinsHealth(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "healthy", Provider: "anthropic", Name: "Healthy", Enabled: true, Priority: 10},
+		Model{ID: "untried", Provider: "anthropic", Name: "Untried", Enabled: true, Priority: 20},
+	)
+	s.RecordSuccess("healthy", 250)
+
+	statuses, err := s.AllModelsWithStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 2 {
+		t.Fatalf("expected 2 statuses, got %d", len(statuses))
+	}
+
+	byID := map[string]ModelStatus{}
+	for _, st := range statuses {
+		byID[st.ID] = st
+	}
+
+	healthy := byID["healthy"]
+	if healthy.Health == nil {
+		t.Fatal("expected a health record for the model that reported success")
+	}
+	if healthy.Health.LastSuccessMs != 250 {
+		t.Errorf("expected last_success_ms 250, got %d", healthy.Health.LastSuccessMs)
+	}
+	if healthy.Health.IsUnknown() {
+		t.Error("a model that reported success must not be Unknown")
+	}
+
+	// A model that has never been called still gets a (zero) health record,
+	// so dashboard callers can rely on Health being non-nil.
+	untried := byID["untried"]
+	if untried.Health == nil {
+		t.Fatal("expected a non-nil health record even for an untried model")
+	}
+	if !untried.Health.IsUnknown() {
+		t.Error("a model that was never called should be Unknown")
+	}
+}
+
+func TestRecordSuccessAndError(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "m", Provider: "anthropic", Name: "M", Enabled: true, Priority: 10},
+	)
+
+	// Unknown until it's been called.
+	if !s.GetHealth("m").IsUnknown() {
+		t.Error("expected a never-called model to be Unknown")
+	}
+
+	// First success seeds the rolling average with the raw duration.
+	s.RecordSuccess("m", 100)
+	h := s.GetHealth("m")
+	if h.LastSuccessMs != 100 {
+		t.Errorf("expected last_success_ms 100, got %d", h.LastSuccessMs)
+	}
+	if h.AvgResponseMs != 100 {
+		t.Errorf("expected the first sample to seed avg=100, got %d", h.AvgResponseMs)
+	}
+
+	// Subsequent successes fold in via the 0.3/0.7 exponential moving average:
+	// (3*200 + 7*100) / 10 = 130.
+	s.RecordSuccess("m", 200)
+	h = s.GetHealth("m")
+	if h.AvgResponseMs != 130 {
+		t.Errorf("expected EMA 130, got %d", h.AvgResponseMs)
+	}
+
+	// Errors accumulate.
+	s.RecordError("m", "timeout")
+	h = s.GetHealth("m")
+	if h.ConsecutiveErr != 1 {
+		t.Errorf("expected 1 consecutive error, got %d", h.ConsecutiveErr)
+	}
+	if h.LastError != "timeout" {
+		t.Errorf("expected last_error 'timeout', got %q", h.LastError)
+	}
+	s.RecordError("m", "500")
+	h = s.GetHealth("m")
+	if h.ConsecutiveErr != 2 {
+		t.Errorf("expected 2 consecutive errors, got %d", h.ConsecutiveErr)
+	}
+
+	// A success clears the error streak.
+	s.RecordSuccess("m", 150)
+	h = s.GetHealth("m")
+	if h.ConsecutiveErr != 0 {
+		t.Errorf("expected the error streak to reset on success, got %d", h.ConsecutiveErr)
+	}
+	if h.LastError != "" {
+		t.Errorf("expected last_error to clear on success, got %q", h.LastError)
+	}
+}
+
+func TestModelHealthIsHealthy(t *testing.T) {
+	now := time.Now()
+	window := time.Hour
+
+	tests := []struct {
+		name   string
+		health *ModelHealth
+		want   bool
+	}{
+		{"nil is never healthy", nil, false},
+		{"never seen", &ModelHealth{Model: "m"}, false},
+		{"recent success", &ModelHealth{Model: "m", LastSuccessAt: now.Add(-time.Minute)}, true},
+		{"success older than the window is stale", &ModelHealth{Model: "m", LastSuccessAt: now.Add(-2 * time.Hour)}, false},
+		{"error after the last success", &ModelHealth{
+			Model:         "m",
+			LastSuccessAt: now.Add(-10 * time.Minute),
+			LastErrorAt:   now.Add(-time.Minute),
+		}, false},
+		{"error before the last success", &ModelHealth{
+			Model:         "m",
+			LastSuccessAt: now.Add(-time.Minute),
+			LastErrorAt:   now.Add(-10 * time.Minute),
+		}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.health.IsHealthy(window); got != tt.want {
+				t.Errorf("IsHealthy(%v) = %v, want %v", window, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestModelHealthIsUnknown(t *testing.T) {
+	var nilHealth *ModelHealth
+	if !nilHealth.IsUnknown() {
+		t.Error("nil health should be Unknown")
+	}
+	if !(&ModelHealth{Model: "m"}).IsUnknown() {
+		t.Error("a health record with no success and no error should be Unknown")
+	}
+	if (&ModelHealth{Model: "m", LastErrorAt: time.Now()}).IsUnknown() {
+		t.Error("a model that has errored has been tried, so it is not Unknown")
+	}
+	if (&ModelHealth{Model: "m", LastSuccessAt: time.Now()}).IsUnknown() {
+		t.Error("a model that has succeeded has been tried, so it is not Unknown")
 	}
 }
 

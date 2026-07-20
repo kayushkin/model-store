@@ -158,6 +158,125 @@ func TestSetEnabled(t *testing.T) {
 	}
 }
 
+func TestSetCost(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "claude-test", Provider: "anthropic", Name: "Test", Enabled: true, Priority: 10, InputCost: 1, OutputCost: 2},
+	)
+
+	if err := s.SetCost("claude-test", 3.5, 14); err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.ResolveModel("claude-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.InputCost != 3.5 || m.OutputCost != 14 {
+		t.Errorf("expected cost 3.5/14, got %v/%v", m.InputCost, m.OutputCost)
+	}
+
+	// Setting the cost of a model that doesn't exist is an error, not a no-op.
+	if err := s.SetCost("no-such-model", 1, 1); err == nil {
+		t.Error("expected an error for an unknown model, got nil")
+	}
+}
+
+func TestSetPriority(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "claude-test", Provider: "anthropic", Name: "Test", Enabled: true, Priority: 100},
+	)
+
+	if err := s.SetPriority("claude-test", 5); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := s.ResolveModel("claude-test")
+	if m.Priority != 5 {
+		t.Errorf("expected priority 5, got %d", m.Priority)
+	}
+
+	if err := s.SetPriority("no-such-model", 1); err == nil {
+		t.Error("expected an error for an unknown model, got nil")
+	}
+}
+
+func TestAddAndRemoveAlias(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "claude-a", Provider: "anthropic", Name: "A", Enabled: true, Priority: 10},
+		Model{ID: "claude-b", Provider: "anthropic", Name: "B", Enabled: true, Priority: 20},
+	)
+
+	if err := s.AddAlias("claude-a", "sonnet"); err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.ResolveModel("sonnet")
+	if err != nil {
+		t.Fatalf("resolve alias after AddAlias: %v", err)
+	}
+	if m.ID != "claude-a" {
+		t.Errorf("expected alias to resolve to claude-a, got %s", m.ID)
+	}
+
+	// Re-adding the same alias->model pair is an idempotent success.
+	if err := s.AddAlias("claude-a", "sonnet"); err != nil {
+		t.Errorf("re-adding the same alias should be a no-op, got %v", err)
+	}
+
+	// Repointing an existing alias to a different model must fail loudly.
+	if err := s.AddAlias("claude-b", "sonnet"); err == nil {
+		t.Error("expected repointing an existing alias to error, got nil")
+	}
+
+	// An alias for a model that doesn't exist is rejected.
+	if err := s.AddAlias("no-such-model", "ghost"); err == nil {
+		t.Error("expected an error aliasing an unknown model, got nil")
+	}
+
+	// An alias that shadows an existing model ID would be unreachable; reject it.
+	if err := s.AddAlias("claude-a", "claude-b"); err == nil {
+		t.Error("expected an error for an alias colliding with a model ID, got nil")
+	}
+
+	// Remove it and confirm it stops resolving.
+	if err := s.RemoveAlias("sonnet"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveModel("sonnet"); err == nil {
+		t.Error("expected the alias to stop resolving after removal")
+	}
+
+	// Removing a nonexistent alias is an error, not a no-op.
+	if err := s.RemoveAlias("sonnet"); err == nil {
+		t.Error("expected an error removing a nonexistent alias, got nil")
+	}
+}
+
+func TestDeleteModel(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "claude-test", Provider: "anthropic", Name: "Test", Enabled: true, Priority: 10, Aliases: []string{"sonnet", "claude-sonnet"}},
+	)
+
+	if err := s.DeleteModel("claude-test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResolveModel("claude-test"); err == nil {
+		t.Error("expected the model to be gone after DeleteModel")
+	}
+	// Its aliases must be gone too, not left dangling.
+	for _, alias := range []string{"sonnet", "claude-sonnet"} {
+		if _, err := s.ResolveModel(alias); err == nil {
+			t.Errorf("expected alias %q to be removed with its model", alias)
+		}
+	}
+
+	// Deleting a model that doesn't exist is an error, not a no-op.
+	if err := s.DeleteModel("no-such-model"); err == nil {
+		t.Error("expected an error deleting an unknown model, got nil")
+	}
+}
+
 func TestFailoverChainOrdersByPriorityAndSkipsDisabled(t *testing.T) {
 	s := tempStore(t)
 	seedProviderWithModels(t, s, "anthropic",

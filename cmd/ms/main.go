@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/kayushkin/aiauth"
@@ -216,6 +217,116 @@ Requires API keys via environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, 
 				return err
 			}
 			fmt.Printf("Disabled %s\n", args[0])
+			return nil
+		},
+	})
+
+	// cost
+	root.AddCommand(&cobra.Command{
+		Use:   "cost <model> <input> <output>",
+		Short: "Set a model's input/output cost per million tokens",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			in, err := strconv.ParseFloat(args[1], 64)
+			if err != nil {
+				return fmt.Errorf("input cost %q is not a number: %w", args[1], err)
+			}
+			out, err := strconv.ParseFloat(args[2], 64)
+			if err != nil {
+				return fmt.Errorf("output cost %q is not a number: %w", args[2], err)
+			}
+			store, err := ms.Open("")
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			if err := store.SetCost(args[0], in, out); err != nil {
+				return err
+			}
+			fmt.Printf("Set %s cost to $%.2f in / $%.2f out per MTok\n", args[0], in, out)
+			return nil
+		},
+	})
+
+	// priority
+	root.AddCommand(&cobra.Command{
+		Use:   "priority <model> <n>",
+		Short: "Set a model's failover priority (lower = preferred)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p, err := strconv.Atoi(args[1])
+			if err != nil {
+				return fmt.Errorf("priority %q is not an integer: %w", args[1], err)
+			}
+			store, err := ms.Open("")
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			if err := store.SetPriority(args[0], p); err != nil {
+				return err
+			}
+			fmt.Printf("Set %s priority to %d\n", args[0], p)
+			return nil
+		},
+	})
+
+	// alias (add / rm)
+	aliasCmd := &cobra.Command{
+		Use:   "alias",
+		Short: "Manage model aliases",
+	}
+	aliasCmd.AddCommand(&cobra.Command{
+		Use:   "add <model> <alias>",
+		Short: "Point an alias at a model",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := ms.Open("")
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			if err := store.AddAlias(args[0], args[1]); err != nil {
+				return err
+			}
+			fmt.Printf("Aliased %s -> %s\n", args[1], args[0])
+			return nil
+		},
+	})
+	aliasCmd.AddCommand(&cobra.Command{
+		Use:   "rm <alias>",
+		Short: "Remove an alias",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := ms.Open("")
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			if err := store.RemoveAlias(args[0]); err != nil {
+				return err
+			}
+			fmt.Printf("Removed alias %s\n", args[0])
+			return nil
+		},
+	})
+	root.AddCommand(aliasCmd)
+
+	// delete
+	root.AddCommand(&cobra.Command{
+		Use:   "delete <model>",
+		Short: "Delete a model and its aliases",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := ms.Open("")
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			if err := store.DeleteModel(args[0]); err != nil {
+				return err
+			}
+			fmt.Printf("Deleted %s\n", args[0])
 			return nil
 		},
 	})

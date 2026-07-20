@@ -27,7 +27,16 @@ ms sync                       # fetch live models from all provider APIs
 ms sync anthropic google      # sync specific providers
 ms enable claude-opus-4-6     # enable a model
 ms disable gpt-4o             # disable a model
+ms cost gpt-5 1.25 10         # set input/output cost per million tokens
+ms priority claude-opus-4-6 3 # set failover priority (lower = preferred)
+ms alias add gpt-5 fast       # point an alias at a model
+ms alias rm fast              # remove an alias
+ms delete gpt-4o              # delete a model and its aliases
 ```
+
+The mutating verbs (`enable`/`disable`/`cost`/`priority`/`delete`) key on the exact
+model ID, not an alias — use `ms models` or `ms resolve` to find it. `ms alias add`
+refuses to repoint an existing alias or shadow a model ID; remove the old alias first.
 
 ### Sync
 

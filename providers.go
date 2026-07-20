@@ -203,3 +203,94 @@ func (s *Store) SetEnabled(modelID string, enabled bool) error {
 	}
 	return nil
 }
+
+// SetCost updates a model's per-million-token input and output cost.
+// Like SetEnabled, it keys on the exact model ID, not an alias.
+func (s *Store) SetCost(modelID string, inputCost, outputCost float64) error {
+	res, err := s.db.Exec(
+		"UPDATE models SET input_cost = ?, output_cost = ? WHERE id = ?",
+		inputCost, outputCost, modelID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("model %q not found", modelID)
+	}
+	return nil
+}
+
+// SetPriority updates a model's failover priority (lower = preferred).
+// Like SetEnabled, it keys on the exact model ID, not an alias.
+func (s *Store) SetPriority(modelID string, priority int) error {
+	res, err := s.db.Exec("UPDATE models SET priority = ? WHERE id = ?", priority, modelID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("model %q not found", modelID)
+	}
+	return nil
+}
+
+// AddAlias points an alias at a model. The model must already exist, and the
+// alias must not collide with an existing model ID (ResolveModel tries IDs
+// first, so such an alias would be permanently unreachable) or an alias that
+// already points elsewhere. Remove the old alias first to repoint it.
+func (s *Store) AddAlias(modelID, alias string) error {
+	var exists string
+	if err := s.db.QueryRow("SELECT id FROM models WHERE id = ?", modelID).Scan(&exists); err != nil {
+		return fmt.Errorf("model %q not found", modelID)
+	}
+	if err := s.db.QueryRow("SELECT id FROM models WHERE id = ?", alias).Scan(&exists); err == nil {
+		return fmt.Errorf("alias %q collides with an existing model ID and would be unreachable", alias)
+	}
+	var current string
+	if err := s.db.QueryRow("SELECT model_id FROM model_aliases WHERE alias = ?", alias).Scan(&current); err == nil {
+		if current == modelID {
+			return nil // already points where asked; nothing to do
+		}
+		return fmt.Errorf("alias %q already points to %q; remove it first to repoint", alias, current)
+	}
+	_, err := s.db.Exec("INSERT INTO model_aliases (alias, model_id) VALUES (?, ?)", alias, modelID)
+	return err
+}
+
+// RemoveAlias deletes an alias. It is an error, not a silent no-op, to remove
+// one that does not exist.
+func (s *Store) RemoveAlias(alias string) error {
+	res, err := s.db.Exec("DELETE FROM model_aliases WHERE alias = ?", alias)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("alias %q not found", alias)
+	}
+	return nil
+}
+
+// DeleteModel removes a model and every alias that pointed at it. It keys on the
+// exact model ID and is an error if no such model exists.
+func (s *Store) DeleteModel(modelID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM model_aliases WHERE model_id = ?", modelID); err != nil {
+		return err
+	}
+	res, err := tx.Exec("DELETE FROM models WHERE id = ?", modelID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("model %q not found", modelID)
+	}
+	return tx.Commit()
+}

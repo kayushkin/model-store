@@ -15,6 +15,25 @@ type ModelHealth struct {
 	ConsecutiveErr int       `json:"consecutive_errors,omitempty"`
 }
 
+// LastRecordedOutcomeWasAnError reports whether the most recent outcome written
+// for this model was a failure.
+//
+// It reads ConsecutiveErr rather than comparing LastErrorAt against
+// LastSuccessAt, and that is the whole point. RecordSuccess zeroes the counter
+// and RecordError increments it, so the counter *is* the last-outcome bit,
+// recorded by the writer that knew the answer. The timestamps cannot answer it:
+// they are stored as unix seconds, so an error arriving in the same second as
+// the preceding success is not "after" it, and the comparison silently reported
+// a failing model as healthy. A turn that fails fast — a 400, a 404, an
+// immediately-refused request — fails well inside one second.
+//
+// Do not reintroduce an ordering test on these two timestamps. They are kept for
+// display and diagnostics; at second resolution they cannot order two events in
+// the same second, and health must not depend on how long a request took to fail.
+func (h *ModelHealth) LastRecordedOutcomeWasAnError() bool {
+	return h != nil && h.ConsecutiveErr > 0
+}
+
 // IsHealthy returns true if the model has responded successfully within the window
 // and its last interaction wasn't an error.
 func (h *ModelHealth) IsHealthy(window time.Duration) bool {
@@ -24,7 +43,7 @@ func (h *ModelHealth) IsHealthy(window time.Duration) bool {
 	if time.Since(h.LastSuccessAt) > window {
 		return false // stale
 	}
-	if !h.LastErrorAt.IsZero() && h.LastErrorAt.After(h.LastSuccessAt) {
+	if h.LastRecordedOutcomeWasAnError() {
 		return false // last attempt failed
 	}
 	return true

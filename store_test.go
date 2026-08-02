@@ -421,11 +421,26 @@ func TestModelHealthIsHealthy(t *testing.T) {
 		{"never seen", &ModelHealth{Model: "m"}, false},
 		{"recent success", &ModelHealth{Model: "m", LastSuccessAt: now.Add(-time.Minute)}, true},
 		{"success older than the window is stale", &ModelHealth{Model: "m", LastSuccessAt: now.Add(-2 * time.Hour)}, false},
+		// RecordError stamps LastErrorAt and increments ConsecutiveErr in one
+		// statement, and RecordSuccess clears both together. So a fixture that
+		// sets the stamp must set the counter too; leaving the counter at its
+		// zero value builds a row no writer can produce.
 		{"error after the last success", &ModelHealth{
-			Model:         "m",
-			LastSuccessAt: now.Add(-10 * time.Minute),
-			LastErrorAt:   now.Add(-time.Minute),
+			Model:          "m",
+			LastSuccessAt:  now.Add(-10 * time.Minute),
+			LastErrorAt:    now.Add(-time.Minute),
+			ConsecutiveErr: 1,
 		}, false},
+		// The case the old timestamp comparison got wrong: stored at unix-second
+		// resolution, a fast failure carries the same stamp as the success before it.
+		{"error in the same second as the last success", &ModelHealth{
+			Model:          "m",
+			LastSuccessAt:  now.Add(-time.Minute),
+			LastErrorAt:    now.Add(-time.Minute),
+			ConsecutiveErr: 1,
+		}, false},
+		// A success clears the streak, so this is a legacy row: an error stamp
+		// left behind by an older writer, already superseded by a success.
 		{"error before the last success", &ModelHealth{
 			Model:         "m",
 			LastSuccessAt: now.Add(-time.Minute),
@@ -479,5 +494,84 @@ func TestFreshDB(t *testing.T) {
 	providers, _ := s.Providers()
 	if len(providers) == 0 {
 		t.Error("expected seeded providers")
+	}
+}
+
+// TestAnErrorInTheSameSecondAsASuccessStillMarksTheModelUnhealthy pins the
+// defect that made this file's older health tests assert on ConsecutiveErr and
+// LastError instead of on IsHealthy.
+//
+// model_health stores unix seconds. When IsHealthy decided "the last attempt
+// failed" by testing LastErrorAt.After(LastSuccessAt), a success and an error
+// landing in the same second compared equal — not after — and a model that had
+// just failed kept reporting healthy. Recording back-to-back, as here, is the
+// ordinary case for an error that fails fast (400, 404, an instant refusal).
+func TestAnErrorInTheSameSecondAsASuccessStillMarksTheModelUnhealthy(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "m", Provider: "anthropic", Name: "M", Enabled: true, Priority: 10},
+	)
+
+	s.RecordSuccess("m", 100)
+	s.RecordError("m", "529 overloaded")
+
+	h := s.GetHealth("m")
+
+	// The precondition the bug needed. If these ever differ the test has stopped
+	// exercising the same-second case and must be rewritten, not deleted.
+	if !h.LastErrorAt.Equal(h.LastSuccessAt) {
+		t.Skipf("success and error did not land in the same second (%s vs %s); "+
+			"the same-second case is not being exercised",
+			h.LastSuccessAt, h.LastErrorAt)
+	}
+
+	if h.IsHealthy(24 * time.Hour) {
+		t.Errorf("a model whose last recorded outcome was an error reported healthy "+
+			"(consecutive_errors=%d, last_error=%q)", h.ConsecutiveErr, h.LastError)
+	}
+}
+
+// TestHealthTracksTheLastOutcomeNotTheTimestampOrder walks a success/error/success
+// cycle and asserts IsHealthy follows the outcome each time. The middle step is
+// the one the timestamp comparison could not see.
+func TestHealthTracksTheLastOutcomeNotTheTimestampOrder(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "m", Provider: "anthropic", Name: "M", Enabled: true, Priority: 10},
+	)
+	const window = 24 * time.Hour
+
+	s.RecordSuccess("m", 100)
+	if h := s.GetHealth("m"); !h.IsHealthy(window) {
+		t.Fatal("a model that just succeeded should be healthy")
+	}
+
+	s.RecordError("m", "boom")
+	if h := s.GetHealth("m"); h.IsHealthy(window) {
+		t.Error("a model that just failed should not be healthy")
+	}
+
+	// A success clears the streak, so health returns without waiting for a clock tick.
+	s.RecordSuccess("m", 120)
+	if h := s.GetHealth("m"); !h.IsHealthy(window) {
+		t.Error("a success after an error should restore health")
+	}
+}
+
+// TestNeverSeenAndStaleStillOutrankTheOutcomeBit guards the two checks that run
+// before the outcome test, so a future change to the outcome bit cannot make a
+// never-called or long-silent model look healthy.
+func TestNeverSeenAndStaleStillOutrankTheOutcomeBit(t *testing.T) {
+	never := &ModelHealth{Model: "m"}
+	if never.IsHealthy(24 * time.Hour) {
+		t.Error("a model that has never succeeded must not be healthy")
+	}
+
+	stale := &ModelHealth{Model: "m", LastSuccessAt: time.Now().Add(-48 * time.Hour)}
+	if stale.IsHealthy(24 * time.Hour) {
+		t.Error("a success older than the window must not count as healthy")
+	}
+	if stale.LastRecordedOutcomeWasAnError() {
+		t.Error("a clean-but-stale model has no error streak")
 	}
 }

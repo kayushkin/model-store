@@ -7,7 +7,7 @@ One SQLite database at `~/.config/model-store/store.db`. No server needed — im
 ## Features
 
 - **Provider registry** — Anthropic, OpenAI, Google, Ollama, OpenRouter
-- **Model catalog** — models per provider with aliases, context window, and pricing
+- **Model catalog** — models per provider with aliases, short names, context window, and pricing
 - **Alias resolution** — resolve short names like `sonnet` or `haiku` to full model IDs
 - **Priority & failover** — enabled/disabled state and priority ordering for failover chains
 - **Live sync** — fetch current model lists from Anthropic, OpenAI, and Google APIs
@@ -29,18 +29,26 @@ ms enable claude-opus-4-6     # enable a model
 ms disable gpt-4o             # disable a model
 ms cost gpt-5 1.25 10         # set input/output cost per million tokens
 ms priority claude-opus-4-6 3 # set failover priority (lower = preferred)
+ms shortname claude-opus-4-6 opus-4.6  # set the short display nickname
 ms alias add gpt-5 fast       # point an alias at a model
 ms alias rm fast              # remove an alias
 ms delete gpt-4o              # delete a model and its aliases
 ```
 
-The mutating verbs (`enable`/`disable`/`cost`/`priority`/`delete`) key on the exact
+A model's **short name** is the shortest nickname that still tells it apart from its
+siblings — `opus-4.6`, `5.1-codex`, `2.5-pro`. It is there for the dense corners of a
+UI, like a picker squeezed into a crowded top bar, where the full name would be
+truncated into something ambiguous. It is only a label: nothing resolves a model by
+its short name, so use an alias if you want something you can actually type at `ms
+resolve`.
+
+The mutating verbs (`enable`/`disable`/`cost`/`priority`/`shortname`/`delete`) key on the exact
 model ID, not an alias — use `ms models` or `ms resolve` to find it. `ms alias add`
 refuses to repoint an existing alias or shadow a model ID; remove the old alias first.
 
 ### Sync
 
-`ms sync` fetches the current model list from each provider's API and upserts into the store. Existing models are updated (name, context window) but user-set fields (enabled, priority, cost, aliases) are preserved. New models are added with priority 100 and estimated costs.
+`ms sync` fetches the current model list from each provider's API and upserts into the store. Existing models are updated (name, context window) but user-set fields (enabled, priority, cost, aliases, short name) are preserved. New models are added with priority 100 and estimated costs.
 
 Requires API keys via environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`) or [aiauth](https://github.com/kayushkin/aiauth) profiles.
 
@@ -96,6 +104,7 @@ CREATE TABLE models (
     id          TEXT PRIMARY KEY,   -- "claude-sonnet-4-5-20250929"
     provider    TEXT NOT NULL,      -- references providers(id)
     name        TEXT NOT NULL,      -- display name
+    short_name  TEXT,              -- terse nickname for dense UI ("sonnet-4.5")
     max_tokens  INTEGER,           -- context window
     input_cost  REAL,              -- $ per million tokens
     output_cost REAL,              -- $ per million tokens

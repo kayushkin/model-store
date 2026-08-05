@@ -106,12 +106,14 @@ func (s *Store) syncAnthropic(apiKey string) (*SyncResult, error) {
 			Enabled:   true,
 		}
 		if existing != nil {
-			// Preserve user-set fields
+			// Preserve user-set fields. AddModel replaces the whole row, so
+			// anything not copied across here is erased by every sync run.
 			model.Enabled = existing.Enabled
 			model.Priority = existing.Priority
 			model.InputCost = existing.InputCost
 			model.OutputCost = existing.OutputCost
 			model.Aliases = existing.Aliases
+			model.ShortName = existing.ShortName
 			// Update metadata from API
 			model.Name = m.DisplayName
 			model.MaxTokens = m.MaxInputTokens
@@ -233,6 +235,7 @@ func (s *Store) syncOpenAI(apiKey string) (*SyncResult, error) {
 			model.InputCost = existing.InputCost
 			model.OutputCost = existing.OutputCost
 			model.Aliases = existing.Aliases
+			model.ShortName = existing.ShortName
 			model.Name = existing.Name
 			model.MaxTokens = existing.MaxTokens
 			result.Updated++
@@ -403,6 +406,7 @@ func (s *Store) syncGoogle(apiKey string) (*SyncResult, error) {
 			model.InputCost = existing.InputCost
 			model.OutputCost = existing.OutputCost
 			model.Aliases = existing.Aliases
+			model.ShortName = existing.ShortName
 			model.Name = m.DisplayName
 			model.MaxTokens = m.InputTokenLimit
 			result.Updated++

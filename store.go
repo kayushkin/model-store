@@ -23,9 +23,16 @@ type Provider struct {
 
 // Model represents an available model.
 type Model struct {
-	ID         string   `json:"id"`          // e.g. "claude-sonnet-4-5-20250929"
-	Provider   string   `json:"provider"`    // provider ID
-	Name       string   `json:"name"`        // display name
+	ID       string `json:"id"`       // e.g. "claude-sonnet-4-5-20250929"
+	Provider string `json:"provider"` // provider ID
+	Name     string `json:"name"`     // display name
+	// ShortName is the shortest nickname that still tells this model apart from
+	// its siblings — "opus-4.6" rather than "Claude Opus 4.6". It exists for the
+	// dense places in a UI, like a model picker crammed into an already crowded
+	// top bar, where the full name simply does not fit and would be truncated
+	// into something ambiguous. Name stays the canonical display name; this is a
+	// second, terser label for those spots, never a replacement.
+	ShortName  string   `json:"short_name"`
 	Aliases    []string `json:"aliases"`     // e.g. ["sonnet", "claude-sonnet"]
 	MaxTokens  int      `json:"max_tokens"`  // context window
 	InputCost  float64  `json:"input_cost"`  // per million tokens
@@ -87,7 +94,8 @@ func (s *Store) migrate() error {
 			input_cost REAL DEFAULT 0,
 			output_cost REAL DEFAULT 0,
 			enabled INTEGER DEFAULT 1,
-			priority INTEGER DEFAULT 100
+			priority INTEGER DEFAULT 100,
+			short_name TEXT DEFAULT ''
 		);
 
 		CREATE TABLE IF NOT EXISTS model_aliases (
@@ -102,6 +110,7 @@ func (s *Store) migrate() error {
 	// Add columns to existing databases (safe to run multiple times)
 	s.db.Exec(`ALTER TABLE models ADD COLUMN enabled INTEGER DEFAULT 1`)
 	s.db.Exec(`ALTER TABLE models ADD COLUMN priority INTEGER DEFAULT 100`)
+	s.db.Exec(`ALTER TABLE models ADD COLUMN short_name TEXT DEFAULT ''`)
 
 	return nil
 }

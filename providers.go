@@ -33,15 +33,19 @@ func (s *Store) Providers() ([]Provider, error) {
 	return providers, nil
 }
 
-// AddModel registers a model.
+// AddModel registers a model. It writes with INSERT OR REPLACE, which deletes
+// the old row and inserts a fresh one rather than patching in place, so every
+// column the caller cares about has to appear in the list below — anything
+// omitted silently reverts to its DEFAULT. That is why sync copies the user-set
+// fields off the existing row before calling here.
 func (s *Store) AddModel(m Model) error {
 	enabled := 0
 	if m.Enabled {
 		enabled = 1
 	}
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO models (id, provider, name, max_tokens, input_cost, output_cost, enabled, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.ID, m.Provider, m.Name, m.MaxTokens, m.InputCost, m.OutputCost, enabled, m.Priority,
+		`INSERT OR REPLACE INTO models (id, provider, name, short_name, max_tokens, input_cost, output_cost, enabled, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.Provider, m.Name, m.ShortName, m.MaxTokens, m.InputCost, m.OutputCost, enabled, m.Priority,
 	)
 	if err != nil {
 		return err
@@ -56,7 +60,7 @@ func (s *Store) AddModel(m Model) error {
 // Models lists models for a provider.
 func (s *Store) Models(provider string) ([]Model, error) {
 	rows, err := s.db.Query(
-		`SELECT id, provider, name, max_tokens, input_cost, output_cost, enabled, priority FROM models WHERE provider = ? ORDER BY priority`,
+		`SELECT id, provider, name, short_name, max_tokens, input_cost, output_cost, enabled, priority FROM models WHERE provider = ? ORDER BY priority`,
 		provider,
 	)
 	if err != nil {
@@ -68,7 +72,7 @@ func (s *Store) Models(provider string) ([]Model, error) {
 	for rows.Next() {
 		var m Model
 		var enabled int
-		if err := rows.Scan(&m.ID, &m.Provider, &m.Name, &m.MaxTokens, &m.InputCost, &m.OutputCost, &enabled, &m.Priority); err != nil {
+		if err := rows.Scan(&m.ID, &m.Provider, &m.Name, &m.ShortName, &m.MaxTokens, &m.InputCost, &m.OutputCost, &enabled, &m.Priority); err != nil {
 			continue
 		}
 		m.Enabled = enabled != 0
@@ -93,9 +97,9 @@ func (s *Store) ResolveModel(idOrAlias string) (*Model, error) {
 	var m Model
 	var enabled int
 	err := s.db.QueryRow(
-		`SELECT id, provider, name, max_tokens, input_cost, output_cost, enabled, priority FROM models WHERE id = ?`,
+		`SELECT id, provider, name, short_name, max_tokens, input_cost, output_cost, enabled, priority FROM models WHERE id = ?`,
 		idOrAlias,
-	).Scan(&m.ID, &m.Provider, &m.Name, &m.MaxTokens, &m.InputCost, &m.OutputCost, &enabled, &m.Priority)
+	).Scan(&m.ID, &m.Provider, &m.Name, &m.ShortName, &m.MaxTokens, &m.InputCost, &m.OutputCost, &enabled, &m.Priority)
 
 	if err != nil {
 		// Try alias
@@ -105,9 +109,9 @@ func (s *Store) ResolveModel(idOrAlias string) (*Model, error) {
 			return nil, fmt.Errorf("model not found: %s", idOrAlias)
 		}
 		err = s.db.QueryRow(
-			`SELECT id, provider, name, max_tokens, input_cost, output_cost, enabled, priority FROM models WHERE id = ?`,
+			`SELECT id, provider, name, short_name, max_tokens, input_cost, output_cost, enabled, priority FROM models WHERE id = ?`,
 			modelID,
-		).Scan(&m.ID, &m.Provider, &m.Name, &m.MaxTokens, &m.InputCost, &m.OutputCost, &enabled, &m.Priority)
+		).Scan(&m.ID, &m.Provider, &m.Name, &m.ShortName, &m.MaxTokens, &m.InputCost, &m.OutputCost, &enabled, &m.Priority)
 		if err != nil {
 			return nil, fmt.Errorf("model not found: %s", modelID)
 		}
@@ -122,7 +126,7 @@ func (s *Store) AllModelsWithStatus() ([]ModelStatus, error) {
 	s.migrateHealth()
 
 	rows, err := s.db.Query(`
-		SELECT m.id, m.provider, m.name, m.max_tokens, m.input_cost, m.output_cost, m.enabled, m.priority,
+		SELECT m.id, m.provider, m.name, m.short_name, m.max_tokens, m.input_cost, m.output_cost, m.enabled, m.priority,
 		       COALESCE(h.last_success_at, 0), COALESCE(h.last_success_ms, 0), COALESCE(h.avg_response_ms, 0),
 		       COALESCE(h.last_error_at, 0), COALESCE(h.last_error, ''), COALESCE(h.consecutive_errors, 0)
 		FROM models m
@@ -142,7 +146,7 @@ func (s *Store) AllModelsWithStatus() ([]ModelStatus, error) {
 		var health ModelHealth
 
 		if err := rows.Scan(
-			&ms.ID, &ms.Provider, &ms.Name, &ms.MaxTokens, &ms.InputCost, &ms.OutputCost, &enabled, &ms.Priority,
+			&ms.ID, &ms.Provider, &ms.Name, &ms.ShortName, &ms.MaxTokens, &ms.InputCost, &ms.OutputCost, &enabled, &ms.Priority,
 			&successAt, &health.LastSuccessMs, &health.AvgResponseMs,
 			&errorAt, &health.LastError, &health.ConsecutiveErr,
 		); err != nil {
@@ -166,7 +170,7 @@ func (s *Store) AllModelsWithStatus() ([]ModelStatus, error) {
 // FailoverChain returns enabled models ordered by priority (for failover).
 func (s *Store) FailoverChain() ([]Model, error) {
 	rows, err := s.db.Query(`
-		SELECT id, provider, name, max_tokens, input_cost, output_cost, enabled, priority
+		SELECT id, provider, name, short_name, max_tokens, input_cost, output_cost, enabled, priority
 		FROM models WHERE enabled = 1 ORDER BY priority
 	`)
 	if err != nil {
@@ -178,7 +182,7 @@ func (s *Store) FailoverChain() ([]Model, error) {
 	for rows.Next() {
 		var m Model
 		var enabled int
-		if err := rows.Scan(&m.ID, &m.Provider, &m.Name, &m.MaxTokens, &m.InputCost, &m.OutputCost, &enabled, &m.Priority); err != nil {
+		if err := rows.Scan(&m.ID, &m.Provider, &m.Name, &m.ShortName, &m.MaxTokens, &m.InputCost, &m.OutputCost, &enabled, &m.Priority); err != nil {
 			continue
 		}
 		m.Enabled = true
@@ -225,6 +229,23 @@ func (s *Store) SetCost(modelID string, inputCost, outputCost float64) error {
 // Like SetEnabled, it keys on the exact model ID, not an alias.
 func (s *Store) SetPriority(modelID string, priority int) error {
 	res, err := s.db.Exec("UPDATE models SET priority = ? WHERE id = ?", priority, modelID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("model %q not found", modelID)
+	}
+	return nil
+}
+
+// SetShortName updates a model's short display nickname, the terse label a UI
+// falls back to when the full name will not fit. It does not create an alias:
+// nothing resolves a model by its short name, so two models sharing one is a
+// cosmetic annoyance rather than an ambiguous lookup.
+// Like SetEnabled, it keys on the exact model ID, not an alias.
+func (s *Store) SetShortName(modelID, short string) error {
+	res, err := s.db.Exec("UPDATE models SET short_name = ? WHERE id = ?", short, modelID)
 	if err != nil {
 		return err
 	}

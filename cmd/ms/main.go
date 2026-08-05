@@ -72,7 +72,7 @@ func main() {
 					if !m.Enabled {
 						status = " [disabled]"
 					}
-					fmt.Printf("  %-35s $%.2f/$%.2f per MTok%s%s\n", m.ID, m.InputCost, m.OutputCost, aliases, status)
+					fmt.Printf("  %-35s %-14s $%.2f/$%.2f per MTok%s%s\n", m.ID, m.ShortName, m.InputCost, m.OutputCost, aliases, status)
 				}
 			}
 			return nil
@@ -97,6 +97,7 @@ func main() {
 			}
 
 			fmt.Printf("Model:    %s (%s)\n", model.ID, model.Name)
+			fmt.Printf("Short:    %s\n", model.ShortName)
 			fmt.Printf("Provider: %s\n", model.Provider)
 			fmt.Printf("Context:  %d tokens\n", model.MaxTokens)
 			fmt.Printf("Cost:     $%.2f in / $%.2f out per MTok\n", model.InputCost, model.OutputCost)
@@ -130,7 +131,7 @@ func main() {
 		Use:   "sync [provider...]",
 		Short: "Fetch models from provider APIs (anthropic, openai, google)",
 		Long: `Fetches the live model list from each provider's API and upserts into the store.
-Existing models are updated (name, context window) but user-set fields (enabled, priority, cost, aliases) are preserved.
+Existing models are updated (name, context window) but user-set fields (enabled, priority, cost, aliases, short name) are preserved.
 New models are added with default priority 100 and estimated costs.
 
 Requires API keys via environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY) or aiauth profiles.`,
@@ -267,6 +268,25 @@ Requires API keys via environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, 
 				return err
 			}
 			fmt.Printf("Set %s priority to %d\n", args[0], p)
+			return nil
+		},
+	})
+
+	// shortname
+	root.AddCommand(&cobra.Command{
+		Use:   "shortname <model> <name>",
+		Short: "Set a model's short display nickname (e.g. opus-4.6)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := ms.Open("")
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			if err := store.SetShortName(args[0], args[1]); err != nil {
+				return err
+			}
+			fmt.Printf("Set %s short name to %s\n", args[0], args[1])
 			return nil
 		},
 	})

@@ -200,6 +200,58 @@ func TestSetPriority(t *testing.T) {
 	}
 }
 
+// TestSetShortNameSurvivesEveryReadPath guards the failure this column is most
+// likely to hit: a read path whose SELECT list forgot the column returns the
+// zero value with no error at all, so the nickname just quietly vanishes on
+// that one path while every other path looks fine.
+func TestSetShortNameSurvivesEveryReadPath(t *testing.T) {
+	s := tempStore(t)
+	seedProviderWithModels(t, s, "anthropic",
+		Model{ID: "claude-test", Provider: "anthropic", Name: "Test", Enabled: true, Priority: 100,
+			Aliases: []string{"testy"}},
+	)
+
+	if err := s.SetShortName("claude-test", "opus-4.6"); err != nil {
+		t.Fatal(err)
+	}
+
+	byID, _ := s.ResolveModel("claude-test")
+	if byID.ShortName != "opus-4.6" {
+		t.Errorf("ResolveModel by ID: expected short name opus-4.6, got %q", byID.ShortName)
+	}
+	byAlias, _ := s.ResolveModel("testy")
+	if byAlias.ShortName != "opus-4.6" {
+		t.Errorf("ResolveModel by alias: expected short name opus-4.6, got %q", byAlias.ShortName)
+	}
+	listed, _ := s.Models("anthropic")
+	if len(listed) != 1 || listed[0].ShortName != "opus-4.6" {
+		t.Errorf("Models: expected short name opus-4.6, got %+v", listed)
+	}
+	chain, _ := s.FailoverChain()
+	if len(chain) != 1 || chain[0].ShortName != "opus-4.6" {
+		t.Errorf("FailoverChain: expected short name opus-4.6, got %+v", chain)
+	}
+	statuses, _ := s.AllModelsWithStatus()
+	if len(statuses) != 1 || statuses[0].ShortName != "opus-4.6" {
+		t.Errorf("AllModelsWithStatus: expected short name opus-4.6, got %+v", statuses)
+	}
+
+	// AddModel replaces the whole row, so a re-add that carries the short name
+	// must keep it — this is the path every sync run takes.
+	if err := s.AddModel(Model{ID: "claude-test", Provider: "anthropic", Name: "Test",
+		Enabled: true, Priority: 100, ShortName: "opus-4.6"}); err != nil {
+		t.Fatal(err)
+	}
+	reAdded, _ := s.ResolveModel("claude-test")
+	if reAdded.ShortName != "opus-4.6" {
+		t.Errorf("after AddModel re-add: expected short name opus-4.6, got %q", reAdded.ShortName)
+	}
+
+	if err := s.SetShortName("no-such-model", "nope"); err == nil {
+		t.Error("expected an error for an unknown model, got nil")
+	}
+}
+
 func TestAddAndRemoveAlias(t *testing.T) {
 	s := tempStore(t)
 	seedProviderWithModels(t, s, "anthropic",

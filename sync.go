@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // SyncResult holds the outcome of a provider sync.
@@ -441,10 +442,44 @@ func httpClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
+// truncBody shortens a provider's HTTP error body for the error message the
+// three sync paths build out of it. The three of them each pass a body straight
+// from a provider API — Anthropic, OpenAI and Google all answer errors in JSON
+// whose message field is free text, so a multi-byte rune landing on the cut is
+// ordinary, not exotic.
 func truncBody(b []byte) string {
-	s := string(b)
-	if len(s) > 200 {
-		return s[:200] + "..."
+	return truncateAtRuneBoundaryWithEllipsis(string(b), 200)
+}
+
+// truncateAtRuneBoundaryWithEllipsis returns s shortened to at most maxBytes
+// bytes with "..." appended, cutting only between runes. A string already
+// within budget comes back unchanged and gains no ellipsis, so the result runs
+// up to maxBytes+3 bytes — the name says so because the ellipsis sits outside
+// the budget, exactly as the byte cut it replaced had it.
+//
+// Cutting a Go string at a fixed byte offset splits whatever rune straddles
+// that offset, and the result is not valid UTF-8. Nothing reports it: the split
+// rune travels inside an error value to the ms CLI, which prints it, and a
+// terminal renders the broken sequence as a replacement character with no
+// failure raised anywhere on the path.
+//
+// The walk-back costs at most three byte comparisons and allocates nothing.
+func truncateAtRuneBoundaryWithEllipsis(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
 	}
-	return s
+	// s[cut] is the first byte past the prefix. While it is a continuation
+	// byte, a rune straddles the cut, so move the cut earlier.
+	cut := maxBytes
+	if cut < 0 {
+		// A budget below zero keeps nothing, the same as a budget of zero. The
+		// byte cut this replaced panicked here instead; in source a panic and a
+		// split rune are the same expression, so no scan for one sees the
+		// other. The only caller passes a literal 200.
+		cut = 0
+	}
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
 }

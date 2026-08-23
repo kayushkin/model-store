@@ -5,8 +5,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"time"
+)
+
+// The two paginated providers' base endpoints live here so a test can point
+// syncAnthropic and syncGoogle at a stand-in server and read back what actually
+// went on the wire. Overriding one is a test-only affordance; nothing in the
+// package writes them.
+var (
+	anthropicModelsEndpoint = "https://api.anthropic.com/v1/models"
+	googleModelsEndpoint    = "https://generativelanguage.googleapis.com/v1beta/models"
 )
 
 // SyncResult holds the outcome of a provider sync.
@@ -56,12 +66,16 @@ func (s *Store) syncAnthropic(apiKey string) (*SyncResult, error) {
 	afterID := ""
 
 	for {
-		url := "https://api.anthropic.com/v1/models?limit=100"
+		// after_id is a value the upstream minted and handed back; it goes
+		// through url.Values rather than concatenation so that a token
+		// carrying "+", "&" or "=" stays one parameter with its own bytes.
+		query := neturl.Values{"limit": {"100"}}
 		if afterID != "" {
-			url += "&after_id=" + afterID
+			query.Set("after_id", afterID)
 		}
+		requestURL := anthropicModelsEndpoint + "?" + query.Encode()
 
-		req, err := http.NewRequest("GET", url, nil)
+		req, err := http.NewRequest("GET", requestURL, nil)
 		if err != nil {
 			result.Err = err
 			return result, err
@@ -353,12 +367,18 @@ func (s *Store) syncGoogle(apiKey string) (*SyncResult, error) {
 	pageToken := ""
 
 	for {
-		url := "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key=" + apiKey
+		// key is a credential and pageToken is base64 the upstream minted;
+		// both routinely carry "+", "/" and "=". A receiving server decodes a
+		// raw "+" in a query string to a space, so concatenating either one
+		// sends a value the holder never had, and the resulting failure names
+		// nothing. url.Values escapes both.
+		query := neturl.Values{"pageSize": {"100"}, "key": {apiKey}}
 		if pageToken != "" {
-			url += "&pageToken=" + pageToken
+			query.Set("pageToken", pageToken)
 		}
+		requestURL := googleModelsEndpoint + "?" + query.Encode()
 
-		resp, err := httpClient().Get(url)
+		resp, err := httpClient().Get(requestURL)
 		if err != nil {
 			result.Err = err
 			return result, err

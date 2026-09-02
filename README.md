@@ -2,7 +2,7 @@
 
 Centralized model registry for AI agents. Tracks providers, models, aliases, pricing, and health — shared across the [llm-bridge](https://github.com/kayushkin/llm-bridge) ecosystem and any other consumer.
 
-One SQLite database at `~/.config/model-store/store.db`. No server needed — import the Go library directly or use the CLI.
+One SQLite database at `~/.config/model-store/store.db`. Import the Go library directly, use the `ms` CLI, or run `ms serve` for the HTTP API on `:8155` (what `model-store.service` does).
 
 ## Features
 

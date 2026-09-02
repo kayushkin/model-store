@@ -1,63 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ============================================================================
-# DISARMED 2026-07-13 — this script destroyed the service it claimed to deploy.
+# Builds the ms CLI (which now carries the `serve` subcommand), installs it as
+# both ~/bin/ms and ~/bin/model-store, syncs the systemd unit, restarts the
+# service, and smoke-checks the HTTP surface.
 #
-# model-store.service runs:  ~/bin/model-store --addr :8155
-# ...but the HTTP server it needs NO LONGER EXISTS IN THIS REPO. Commit 3894313
-# ("Remove legacy HTTP server and consolidate into ms CLI", 2026-04-12) deleted
-# cmd/model-store/main.go along with credentials.go, oauth.go and usage.go.
-# What remains under cmd/ is `ms`, a Cobra CLI with no serve mode and no --addr
-# flag.
-#
-# The live :8155 API is served by a STALE binary built ~2026-04-06, before that
-# deletion. It is the only artifact in existence that can serve those routes:
-# the deleted server also imported github.com/kayushkin/bus/messages, which is
-# no longer in go.mod, so restoring the file alone will not rebuild it.
-#
-# This script used to:
-#   1. `go build -o model-store ./cmd/ms`  -> overwrite the repo-root copy of
-#      that irreplaceable binary with the CLI,
-#   2. `cp model-store ~/bin/model-store`  -> overwrite the LIVE one too,
-#   3. `systemctl --user start model-store.service` -> which then runs the CLI
-#      with `--addr :8155`, and Cobra exits 1 on `unknown flag: --addr`.
-#      With Restart=always/RestartSec=5, that is a permanent crash loop.
-#
-# So a single run would have destroyed both copies of the serving binary and
-# taken the model API down for good. kayushkin.com's model + credentials UI
-# proxies :8155 (MODEL_STORE_URL in /etc/systemd/system/kayushkin.service), so
-# it would have started 502ing with no way back.
-#
-# A copy is preserved at:
-#   ~/.local/share/model-store-binary-backup/
-#
-# Restoring a real deploy path requires deciding what model-store's serve mode
-# should be (rewrite it in cmd/ms? resurrect cmd/model-store? retire the HTTP
-# API and move its consumers?). That is noteboard todo 61fe726c, and it is a
-# design decision, not a mechanical fix — so this script refuses to run rather
-# than guess.
-#
-# To deploy the CLI ONLY (which is all this tree can build), install it under a
-# name the service does not use:
-#   go build -o ~/bin/ms ./cmd/ms
-# ============================================================================
+# History: this script was DISARMED 2026-07-13 because commit 3894313 had
+# deleted the HTTP server while the unit still ran `model-store --addr :8155`
+# — deploying the CLI over the irreplaceable pre-deletion binary would have
+# crash-looped the service with no way back. The serve subcommand added to
+# cmd/ms restores a buildable server, so the script is armed again. The last
+# pre-deletion binary is preserved at ~/.local/share/model-store-binary-backup/.
 
-cat >&2 <<'EOF'
-ERROR: model-store/deploy.sh is disarmed and will not run.
+cd "$(dirname "$0")"
 
-This repo can no longer build the binary that model-store.service runs. The HTTP
-server was deleted in commit 3894313; only the `ms` CLI remains, and it has no
---addr flag. Deploying it would overwrite the live serving binary (:8155) with a
-CLI that instantly exits 1, crash-looping the unit and breaking kayushkin.com's
-model UI -- irreversibly, because the serving binary cannot be rebuilt from this
-tree.
+echo "==> go test ./..."
+go test ./...
 
-  live binary : ~/bin/model-store  (built ~2026-04-06, pre-deletion)
-  backup      : ~/.local/share/model-store-binary-backup/
-  decision    : noteboard todo 61fe726c (model-store has no serve mode)
+echo "==> building cmd/ms"
+go build -o /tmp/model-store-deploy-build ./cmd/ms
 
-To build the CLI without touching the service:
-  go build -o ~/bin/ms ./cmd/ms
-EOF
-exit 1
+echo "==> installing ~/bin/ms and ~/bin/model-store"
+install -m 0755 /tmp/model-store-deploy-build "$HOME/bin/ms"
+install -m 0755 /tmp/model-store-deploy-build "$HOME/bin/model-store"
+rm /tmp/model-store-deploy-build
+
+echo "==> syncing systemd unit"
+install -m 0644 model-store.service "$HOME/.config/systemd/user/model-store.service"
+systemctl --user daemon-reload
+
+echo "==> restarting model-store.service"
+systemctl --user restart model-store.service
+
+echo "==> smoke check"
+sleep 1
+systemctl --user is-active model-store.service
+curl -sfS http://localhost:8155/api/health >/dev/null
+# The rewrite's point: /api/models must carry short_name, which the stale
+# 2026-04-06 binary did not serve.
+curl -sfS http://localhost:8155/api/models | grep -q '"short_name"'
+echo "==> deployed: :8155 serving /api/models with short_name"

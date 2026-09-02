@@ -17,6 +17,8 @@ func main() {
 		Short: "Model store — centralized model registry",
 	}
 
+	root.AddCommand(newServeCommand())
+
 	// providers
 	root.AddCommand(&cobra.Command{
 		Use:   "providers",

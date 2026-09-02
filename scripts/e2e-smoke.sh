@@ -1,27 +1,17 @@
 #!/usr/bin/env bash
 # Boot-and-answer smoke test for model-store.
 #
-# READ THIS FIRST — model-store is NOT an HTTP smoke, and that is the finding.
+# This smoke proves what the tree produces: the `ms` CLI and its `ms serve`
+# HTTP mode. It builds the binary, seeds a throwaway store, asserts the CLI
+# answers with real parsed content, then boots `ms serve` on a throwaway port
+# and drives the HTTP routes the real consumers use.
 #
-# The other store smokes boot a server and drive routes. This one cannot, because
-# THE COMMITTED TREE CONTAINS NO HTTP SERVER. Commit 3894313 ("Remove legacy HTTP
-# server and consolidate into ms CLI", 2026-04-12) deleted cmd/model-store/main.go
-# along with credentials.go, oauth.go and usage.go. What remains under cmd/ is
-# `ms`: a Cobra CLI with no serve mode and no --addr flag.
-#
-# The live :8155 API is still served — by a STALE binary built ~2026-04-06, before
-# that deletion, which nothing has redeployed since. It cannot be rebuilt from any
-# commit in this history (the deleted server also imported bus/messages, which is
-# no longer in go.mod). A copy is preserved at
-# ~/.local/share/model-store-binary-backup/.
-#
-# So this smoke proves what this tree CAN produce: a working `ms` CLI. It boots
-# the binary, seeds a throwaway store, and asserts the CLI answers with real
-# parsed content — the same contract as the HTTP smokes, one layer down. Deciding
-# what model-store's serve mode should be (rewrite it in cmd/ms? resurrect
-# cmd/model-store? retire the HTTP API?) is noteboard todo 61fe726c; when that
-# lands, this smoke should grow an HTTP phase and the `--addr` pin below will
-# fail, which is exactly the reminder whoever fixes it should get.
+# History: between commit 3894313 ("Remove legacy HTTP server and consolidate
+# into ms CLI", 2026-04-12) and the serve subcommand landing (2026-09-02, todo
+# 61fe726c), this tree had NO HTTP server, and :8155 was served by a stale
+# pre-deletion binary preserved at ~/.local/share/model-store-binary-backup/.
+# This smoke then carried a DRIFT PIN asserting that broken state; the pin is
+# replaced by the HTTP phase below.
 #
 # HERMETICITY — the ONLY lever is $HOME.
 # model-store has NO env var and NO flag for the DB path: every ms.Open("") call
@@ -127,24 +117,21 @@ echo "    binary: $(ls -lh "$BIN_DIR/ms" | awk '{print $5}')"
 step "the binary runs at all — --help exits 0 and names its subcommands"
 ms --help || fail "ms --help exited non-zero"
 assert_out "Available Commands:" "ms --help"
-for sub in providers models resolve seed sync enable disable; do
+for sub in providers models resolve seed sync enable disable serve; do
   assert_out "$sub" "ms --help lists the '$sub' subcommand"
 done
 
 # ============================================================================
-step "DRIFT PIN — the binary the .service runs cannot serve HTTP"
-# model-store.service runs `~/bin/model-store --addr :8155`, and deploy.sh builds
-# ./cmd/ms into that path. This asserts what that combination actually does: the
-# CLI rejects --addr and exits non-zero, which under Restart=always is a permanent
-# crash loop. deploy.sh is disarmed for exactly this reason.
-#
-# WHEN A SERVE MODE IS ADDED (todo 61fe726c), THIS ASSERTION SHOULD FAIL. That is
-# the point — it will send whoever adds it back to deploy.sh to re-arm it.
+step "the unit's invocation shape parses — 'serve' is a subcommand, bare --addr is not"
+# model-store.service runs `model-store serve --addr :8155`. Assert both halves:
+# the root command still rejects a bare --addr (so the pre-serve unit shape stays
+# dead), and `serve --help` accepts the flag the unit passes.
 if ms --addr :8155; then
-  fail "ms accepted --addr — a serve mode now exists? Then 61fe726c is resolved: teach this smoke to boot it, and RE-ARM deploy.sh (it is currently disarmed)."
+  fail "bare 'ms --addr' was accepted — the root command grew a flag the unit does not expect"
 fi
-assert_out "unknown flag: --addr" "ms --addr is rejected"
-echo "    confirmed: 'ms --addr :8155' exits non-zero with 'unknown flag'"
+assert_out "unknown flag: --addr" "bare ms --addr is rejected"
+ms serve --help || fail "ms serve --help exited non-zero"
+assert_out "--addr" "ms serve --help documents --addr"
 
 # ============================================================================
 step "ms seed — creates the store and populates it (no network)"
@@ -206,6 +193,48 @@ ms resolve claude-sonnet-4-6 || fail "ms resolve after re-seed exited non-zero"
 assert_out "Enabled:  true" "the store still answers after a re-seed"
 
 # ============================================================================
+step "ms serve — boots against the sandbox and answers the routes consumers use"
+# A throwaway high port; the sandbox HOME keeps it off the live store.
+SERVE_PORT=18155
+HOME="$FAKE_HOME" "$BIN_DIR/ms" serve --addr "127.0.0.1:$SERVE_PORT" >"$TMP_DIR/serve.log" 2>&1 &
+SERVE_PID=$!
+serve_cleanup() { kill "$SERVE_PID" 2>/dev/null || true; }
+trap 'serve_cleanup; cleanup' EXIT INT TERM
+
+for i in $(seq 1 20); do
+  curl -sf "http://127.0.0.1:$SERVE_PORT/api/health" >/dev/null 2>&1 && break
+  kill -0 "$SERVE_PID" 2>/dev/null || { cat "$TMP_DIR/serve.log" >&2; fail "ms serve died on boot"; }
+  sleep 0.2
+done
+curl -sf "http://127.0.0.1:$SERVE_PORT/api/health" >"$OUT" || fail "GET /api/health failed"
+assert_out '"ok":true' "GET /api/health answers ok"
+
+curl -sf "http://127.0.0.1:$SERVE_PORT/api/models" >"$OUT" || fail "GET /api/models failed"
+assert_out '"claude-sonnet-4-6"' "GET /api/models lists a seeded model"
+# The whole reason serve mode was rewritten: the stale 2026-04-06 binary served
+# this route WITHOUT short_name, and its daily writes erased the column.
+assert_out '"short_name"' "GET /api/models carries short_name"
+# model-poll reads these fields from this response.
+for field in '"input_cost"' '"output_cost"' '"priority"' '"enabled"'; do
+  assert_out "$field" "GET /api/models carries $field"
+done
+
+curl -s -X POST "http://127.0.0.1:$SERVE_PORT/api/models/toggle" \
+  -d '{"model":"claude-sonnet-4-6","enabled":false}' >"$OUT" || fail "POST /api/models/toggle failed"
+assert_out '"ok":true' "toggle answers ok"
+ms resolve claude-sonnet-4-6 || fail "ms resolve after HTTP toggle exited non-zero"
+assert_out "Enabled:  false" "the HTTP toggle persisted to the store"
+curl -s -X POST "http://127.0.0.1:$SERVE_PORT/api/models/toggle" \
+  -d '{"model":"claude-sonnet-4-6","enabled":true}' >/dev/null
+
+CRED_CODE=$(curl -s -o "$OUT" -w '%{http_code}' "http://127.0.0.1:$SERVE_PORT/api/credentials")
+[ "$CRED_CODE" = "410" ] || fail "GET /api/credentials answered $CRED_CODE, expected 410 Gone"
+assert_out "auth-store" "the credentials 410 names the replacement"
+
+serve_cleanup
+trap cleanup EXIT INT TERM
+
+# ============================================================================
 # Hermeticity. HOME is the only lever there is, so this is not a formality.
 # ============================================================================
 step "hermeticity: the store landed in the sandbox, and the LIVE store is untouched"
@@ -221,5 +250,4 @@ else
 fi
 echo "    only $SANDBOX_DB was written"
 
-step "SUCCESS — model-store's CLI boots and answers from this tree"
-echo "    (there is still no HTTP server to smoke — see the header, and todo 61fe726c)"
+step "SUCCESS — model-store's CLI and serve mode boot and answer from this tree"

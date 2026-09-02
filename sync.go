@@ -148,12 +148,14 @@ func (s *Store) syncAnthropic(apiKey string) (*SyncResult, error) {
 
 func guessAnthropicCost(id string) (input, output float64) {
 	switch {
+	case strings.Contains(id, "fable"):
+		return 10.0, 50.0
 	case strings.Contains(id, "opus"):
-		return 15.0, 75.0
+		return 5.0, 25.0
 	case strings.Contains(id, "sonnet"):
 		return 3.0, 15.0
 	case strings.Contains(id, "haiku"):
-		return 0.80, 4.0
+		return 1.0, 5.0
 	default:
 		return 3.0, 15.0
 	}

@@ -106,17 +106,10 @@ func (s *Store) syncAnthropic(apiKey string) (*SyncResult, error) {
 			Enabled:   true,
 		}
 		if existing != nil {
-			// Preserve user-set fields. AddModel replaces the whole row, so
-			// anything not copied across here is erased by every sync run.
-			model.Enabled = existing.Enabled
-			model.Priority = existing.Priority
-			model.InputCost = existing.InputCost
-			model.OutputCost = existing.OutputCost
-			model.Aliases = existing.Aliases
-			model.ShortName = existing.ShortName
-			// Update metadata from API
-			model.Name = m.DisplayName
-			model.MaxTokens = m.MaxInputTokens
+			model.adoptUserSetFieldsFrom(existing)
+			// Name and MaxTokens keep the values the literal above took from
+			// this answer: Anthropic sends both on every sync and is the
+			// authority on them.
 			result.Updated++
 		} else {
 			model.Priority = 100 // new models get default priority
@@ -232,12 +225,10 @@ func (s *Store) syncOpenAI(apiKey string) (*SyncResult, error) {
 			Enabled:  true,
 		}
 		if existing != nil {
-			model.Enabled = existing.Enabled
-			model.Priority = existing.Priority
-			model.InputCost = existing.InputCost
-			model.OutputCost = existing.OutputCost
-			model.Aliases = existing.Aliases
-			model.ShortName = existing.ShortName
+			model.adoptUserSetFieldsFrom(existing)
+			// Unlike Anthropic and Google, the OpenAI models endpoint returns
+			// neither a display name nor a context window, so the stored values
+			// are the only ones there are and must be carried over too.
 			model.Name = existing.Name
 			model.MaxTokens = existing.MaxTokens
 			result.Updated++
@@ -328,10 +319,10 @@ type googleModelsResponse struct {
 }
 
 type googleModel struct {
-	Name                      string   `json:"name"`         // "models/gemini-2.5-pro"
-	DisplayName               string   `json:"displayName"`
-	InputTokenLimit           int      `json:"inputTokenLimit"`
-	OutputTokenLimit          int      `json:"outputTokenLimit"`
+	Name                       string   `json:"name"` // "models/gemini-2.5-pro"
+	DisplayName                string   `json:"displayName"`
+	InputTokenLimit            int      `json:"inputTokenLimit"`
+	OutputTokenLimit           int      `json:"outputTokenLimit"`
 	SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
 }
 
@@ -403,14 +394,10 @@ func (s *Store) syncGoogle(apiKey string) (*SyncResult, error) {
 			Enabled:   true,
 		}
 		if existing != nil {
-			model.Enabled = existing.Enabled
-			model.Priority = existing.Priority
-			model.InputCost = existing.InputCost
-			model.OutputCost = existing.OutputCost
-			model.Aliases = existing.Aliases
-			model.ShortName = existing.ShortName
-			model.Name = m.DisplayName
-			model.MaxTokens = m.InputTokenLimit
+			model.adoptUserSetFieldsFrom(existing)
+			// Name and MaxTokens keep the values the literal above took from
+			// this answer: Google sends both on every sync and is the authority
+			// on them.
 			result.Updated++
 		} else {
 			model.Priority = 100
@@ -449,4 +436,30 @@ func truncBody(b []byte) string {
 		return s[:200] + "..."
 	}
 	return s
+}
+
+// adoptUserSetFieldsFrom copies across the fields a person owns, not the
+// provider: everything a sync run must carry over from the row already in the
+// store instead of taking from the API answer.
+//
+// It exists because AddModel writes with INSERT OR REPLACE, which deletes the
+// old row and inserts a fresh one, so a field this method forgets is not merely
+// left stale — it is erased on the next sync, silently, for every model the
+// provider still lists. That is not hypothetical: short_name was reported
+// disappearing from the live store before the copy existed.
+//
+// Every provider sync calls this, so the policy has one authoring. Metadata the
+// provider is authoritative for — the display name and the context window — is
+// deliberately NOT copied here, because the three providers disagree about it:
+// Anthropic and Google send both on every answer and should win, while the
+// OpenAI models endpoint sends neither, so its call site keeps the stored values
+// itself. Adding a column to Model means adding it here or deciding, in writing,
+// that the provider owns it.
+func (m *Model) adoptUserSetFieldsFrom(existing *Model) {
+	m.Enabled = existing.Enabled
+	m.Priority = existing.Priority
+	m.InputCost = existing.InputCost
+	m.OutputCost = existing.OutputCost
+	m.Aliases = existing.Aliases
+	m.ShortName = existing.ShortName
 }

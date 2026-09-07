@@ -1,7 +1,20 @@
 package modelstore
 
 // Seed populates the store with known providers and models.
-// Uses INSERT OR REPLACE so it can be re-run safely to update pricing/metadata.
+//
+// ⚠️ Re-running this is NOT safe on a store someone has configured. It writes
+// every model below through AddModel, which is INSERT OR REPLACE, so each row
+// listed here is replaced wholesale by the literal in this file: a priority the
+// user changed, a model they disabled, a cost they corrected, an alias they added
+// and a short name they set are all reset to whatever is written below. Unlike a
+// provider sync, nothing reads the existing row first — Seed has no equivalent of
+// adoptUserSetFieldsFrom, because it is meant for an empty store.
+//
+// Its one in-tree caller guards it accordingly: inber seeds only when the store
+// reports no providers at all (engine/engine_new.go). `ms seed` does not guard it.
+//
+// This comment used to say the opposite — "so it can be re-run safely to update
+// pricing/metadata" — which is how a person ends up running it on a live store.
 func (s *Store) Seed() error {
 	providers := []Provider{
 		{ID: "anthropic", Name: "Anthropic"},

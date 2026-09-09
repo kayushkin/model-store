@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	ms "github.com/kayushkin/model-store"
 	"github.com/spf13/cobra"
@@ -90,6 +91,56 @@ func newServeHandler(store *ms.Store) http.Handler {
 			return
 		}
 		jsonResponse(w, map[string]any{"ok": true, "model": req.Model, "enabled": req.Enabled})
+	})
+
+	// GET /api/roles          → {"best":"claude-fable-5-1", ...} plus the
+	//                            canonical role set so a client never invents it.
+	// GET /api/roles/{role}    → the fully resolved Model for that role.
+	// POST /api/roles          → {"role":"efficient","model":"gpt-5.6-luna"} sets it.
+	mux.HandleFunc("/api/roles", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			roles, err := store.Roles()
+			if err != nil {
+				httpError(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			jsonResponse(w, map[string]any{"roles": roles, "canonical": ms.CanonicalRoles})
+		case http.MethodPost:
+			var req struct {
+				Role  string `json:"role"`
+				Model string `json:"model"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				httpError(w, "invalid body", http.StatusBadRequest)
+				return
+			}
+			if err := store.SetRole(req.Role, req.Model); err != nil {
+				httpError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			jsonResponse(w, map[string]any{"ok": true, "role": req.Role, "model": req.Model})
+		default:
+			httpError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	mux.HandleFunc("/api/roles/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			httpError(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		role := strings.TrimPrefix(r.URL.Path, "/api/roles/")
+		if role == "" {
+			httpError(w, "role required", http.StatusBadRequest)
+			return
+		}
+		m, err := store.ResolveRole(role)
+		if err != nil {
+			httpError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		jsonResponse(w, m)
 	})
 
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {

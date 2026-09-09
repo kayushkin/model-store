@@ -164,6 +164,31 @@ func (s *Store) AllModelsWithStatus() ([]ModelStatus, error) {
 		ms.Health = &health
 		result = append(result, ms)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Load aliases per model. Without this the HTTP surface reported
+	// aliases:null for every row — the `best` pointer and every nickname were
+	// invisible to any consumer reading /api/models, which is the entire reason
+	// callers reinvented their own default resolution. Done after the rows loop
+	// because sqlite serialises one connection's queries: iterating the outer
+	// rows while opening an inner query on the same *sql.DB deadlocks.
+	for i := range result {
+		aliasRows, err := s.db.Query(`SELECT alias FROM model_aliases WHERE model_id = ?`, result[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		for aliasRows.Next() {
+			var a string
+			if err := aliasRows.Scan(&a); err != nil {
+				aliasRows.Close()
+				return nil, err
+			}
+			result[i].Aliases = append(result[i].Aliases, a)
+		}
+		aliasRows.Close()
+	}
 	return result, nil
 }
 

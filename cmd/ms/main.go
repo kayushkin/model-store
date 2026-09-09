@@ -334,6 +334,71 @@ Requires API keys via environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, 
 	})
 	root.AddCommand(aliasCmd)
 
+	// role: purpose-named pointers (best / default / efficient) into the registry
+	roleCmd := &cobra.Command{
+		Use:   "role",
+		Short: "Manage model roles (best / default / efficient)",
+	}
+	roleCmd.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List role assignments",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := ms.Open("")
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			roles, err := store.Roles()
+			if err != nil {
+				return err
+			}
+			for _, r := range ms.CanonicalRoles {
+				if id, ok := roles[r]; ok {
+					fmt.Printf("%-10s -> %s\n", r, id)
+				} else {
+					fmt.Printf("%-10s -> (unassigned)\n", r)
+				}
+			}
+			return nil
+		},
+	})
+	roleCmd.AddCommand(&cobra.Command{
+		Use:   "set <role> <model>",
+		Short: "Point a role at a model",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := ms.Open("")
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			if err := store.SetRole(args[0], args[1]); err != nil {
+				return err
+			}
+			fmt.Printf("Role %s -> %s\n", args[0], args[1])
+			return nil
+		},
+	})
+	roleCmd.AddCommand(&cobra.Command{
+		Use:   "rm <role>",
+		Short: "Clear a role assignment",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := ms.Open("")
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			if err := store.RemoveRole(args[0]); err != nil {
+				return err
+			}
+			fmt.Printf("Cleared role %s\n", args[0])
+			return nil
+		},
+	})
+	root.AddCommand(roleCmd)
+
 	// delete
 	root.AddCommand(&cobra.Command{
 		Use:   "delete <model>",

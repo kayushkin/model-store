@@ -102,6 +102,11 @@ func (s *Store) migrate() error {
 			alias TEXT PRIMARY KEY,
 			model_id TEXT NOT NULL REFERENCES models(id)
 		);
+
+		CREATE TABLE IF NOT EXISTS model_roles (
+			role TEXT PRIMARY KEY,
+			model_id TEXT NOT NULL REFERENCES models(id)
+		);
 	`)
 	if err != nil {
 		return err

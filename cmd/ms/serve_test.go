@@ -111,3 +111,54 @@ func TestServeCredentialRoutesAreGoneNot404(t *testing.T) {
 		}
 	}
 }
+
+func TestServeRolesGetSetResolve(t *testing.T) {
+	store, server := newTestServer(t)
+	if err := store.SetRole(ms.RoleDefault, "claude-fable-5-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// GET /api/roles lists the assignment and the canonical set.
+	resp, err := http.Get(server.URL + "/api/roles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var listed struct {
+		Roles     map[string]string `json:"roles"`
+		Canonical []string          `json:"canonical"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if listed.Roles["default"] != "claude-fable-5-1" {
+		t.Fatalf("default role = %q, want claude-fable-5-1", listed.Roles["default"])
+	}
+	if len(listed.Canonical) != 3 {
+		t.Fatalf("canonical roles = %v, want 3", listed.Canonical)
+	}
+
+	// GET /api/roles/{role} resolves to the full model.
+	resp2, err := http.Get(server.URL + "/api/roles/default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	var m ms.Model
+	if err := json.NewDecoder(resp2.Body).Decode(&m); err != nil {
+		t.Fatal(err)
+	}
+	if m.ID != "claude-fable-5-1" || m.MaxTokens != 1000000 {
+		t.Fatalf("resolved model = %+v, want fable-5.1 with 1M context", m)
+	}
+
+	// An unassigned role is 404, not a fabricated fallback.
+	resp3, err := http.Get(server.URL + "/api/roles/best")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusNotFound {
+		t.Fatalf("unassigned role status = %d, want 404", resp3.StatusCode)
+	}
+}

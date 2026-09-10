@@ -1,6 +1,8 @@
 package modelstore
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -91,32 +93,67 @@ func (s *Store) Models(provider string) ([]Model, error) {
 	return models, nil
 }
 
-// ResolveModel resolves a model ID or alias to a full Model.
-func (s *Store) ResolveModel(idOrAlias string) (*Model, error) {
-	// Try direct ID first
+// ResolveModel resolves a model ID, alias, or canonical role to a full Model.
+//
+// Lookup order is id, then alias, then role. Roles are checked LAST on purpose:
+// the role set is fixed to three names (CanonicalRoles), so a collision with a
+// real id or alias is unlikely, but if one ever exists the concrete id/alias
+// wins and the role is never consulted — a caller that names a real row gets
+// that row, not a pointer to something else.
+func (s *Store) ResolveModel(idOrAliasOrRole string) (*Model, error) {
+	// 1. Direct ID.
+	if m, err := s.modelByID(idOrAliasOrRole); err == nil {
+		return m, nil
+	}
+
+	// 2. Alias.
+	var modelID string
+	err := s.db.QueryRow(`SELECT model_id FROM model_aliases WHERE alias = ?`, idOrAliasOrRole).Scan(&modelID)
+	if err == nil {
+		m, err := s.modelByID(modelID)
+		if err != nil {
+			return nil, fmt.Errorf("alias %q points at unknown model %q", idOrAliasOrRole, modelID)
+		}
+		return m, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+
+	// 3. Canonical role (see the doc comment for why this comes after id and alias).
+	if IsCanonicalRole(idOrAliasOrRole) {
+		// Read model_roles directly rather than via ResolveRole: ResolveRole calls
+		// back into ResolveModel with the assigned id, so going through it here
+		// would be a needless round trip on the happy path.
+		err := s.db.QueryRow(`SELECT model_id FROM model_roles WHERE role = ?`, idOrAliasOrRole).Scan(&modelID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("role %q is not assigned", idOrAliasOrRole)
+		}
+		if err != nil {
+			return nil, err
+		}
+		m, err := s.modelByID(modelID)
+		if err != nil {
+			return nil, fmt.Errorf("role %q points at unknown model %q", idOrAliasOrRole, modelID)
+		}
+		return m, nil
+	}
+
+	return nil, fmt.Errorf("model not found: %s", idOrAliasOrRole)
+}
+
+// modelByID loads one model row by its exact id. sql.ErrNoRows is returned
+// unwrapped so callers can distinguish "absent" from a real database error.
+func (s *Store) modelByID(id string) (*Model, error) {
 	var m Model
 	var enabled int
 	err := s.db.QueryRow(
 		`SELECT id, provider, name, short_name, max_tokens, input_cost, output_cost, enabled, priority FROM models WHERE id = ?`,
-		idOrAlias,
+		id,
 	).Scan(&m.ID, &m.Provider, &m.Name, &m.ShortName, &m.MaxTokens, &m.InputCost, &m.OutputCost, &enabled, &m.Priority)
-
 	if err != nil {
-		// Try alias
-		var modelID string
-		err = s.db.QueryRow(`SELECT model_id FROM model_aliases WHERE alias = ?`, idOrAlias).Scan(&modelID)
-		if err != nil {
-			return nil, fmt.Errorf("model not found: %s", idOrAlias)
-		}
-		err = s.db.QueryRow(
-			`SELECT id, provider, name, short_name, max_tokens, input_cost, output_cost, enabled, priority FROM models WHERE id = ?`,
-			modelID,
-		).Scan(&m.ID, &m.Provider, &m.Name, &m.ShortName, &m.MaxTokens, &m.InputCost, &m.OutputCost, &enabled, &m.Priority)
-		if err != nil {
-			return nil, fmt.Errorf("model not found: %s", modelID)
-		}
+		return nil, err
 	}
-
 	m.Enabled = enabled != 0
 	return &m, nil
 }

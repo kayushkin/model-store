@@ -2,6 +2,7 @@ package modelstore
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -107,5 +108,73 @@ func TestAllModelsWithStatusCarriesAliases(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("gpt-5.6-luna missing from AllModelsWithStatus")
+	}
+}
+
+// ResolveModel is the one resolver every caller (including `ms resolve`) goes
+// through, so a canonical role name must resolve there too — not only via
+// ResolveRole.
+func TestResolveModelAcceptsCanonicalRoleName(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SetRole(RoleEfficient, "gpt-5.6-luna"); err != nil {
+		t.Fatalf("SetRole: %v", err)
+	}
+	m, err := s.ResolveModel(RoleEfficient)
+	if err != nil {
+		t.Fatalf("ResolveModel(%q): %v", RoleEfficient, err)
+	}
+	if m.ID != "gpt-5.6-luna" {
+		t.Fatalf("ResolveModel(%q) = %q, want gpt-5.6-luna", RoleEfficient, m.ID)
+	}
+}
+
+func TestResolveModelUnassignedRoleFailsLoud(t *testing.T) {
+	s := newTestStore(t)
+	m, err := s.ResolveModel(RoleBest)
+	if err == nil {
+		t.Fatalf("ResolveModel(%q) with no assignment returned %q, want error", RoleBest, m.ID)
+	}
+	if !strings.Contains(err.Error(), "not assigned") {
+		t.Fatalf("error should say the role is unassigned, got: %v", err)
+	}
+}
+
+func TestResolveModelAliasStillResolves(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.AddAlias("claude-fable-5-1", "fable"); err != nil {
+		t.Fatalf("AddAlias: %v", err)
+	}
+	m, err := s.ResolveModel("fable")
+	if err != nil {
+		t.Fatalf("ResolveModel(alias): %v", err)
+	}
+	if m.ID != "claude-fable-5-1" {
+		t.Fatalf("alias resolved to %q, want claude-fable-5-1", m.ID)
+	}
+}
+
+// A real alias that happens to share a role's name wins over the role: the
+// lookup order is id, alias, role, and this pins it.
+func TestResolveModelAliasNamedLikeRoleWinsOverRole(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SetRole(RoleBest, "gpt-5.6-luna"); err != nil {
+		t.Fatalf("SetRole: %v", err)
+	}
+	if err := s.AddAlias("claude-fable-5-1", RoleBest); err != nil {
+		t.Fatalf("AddAlias: %v", err)
+	}
+	m, err := s.ResolveModel(RoleBest)
+	if err != nil {
+		t.Fatalf("ResolveModel: %v", err)
+	}
+	if m.ID != "claude-fable-5-1" {
+		t.Fatalf("alias %q should win over the role, got %q", RoleBest, m.ID)
+	}
+}
+
+func TestResolveModelUnknownNameStillErrors(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.ResolveModel("no-such-model"); err == nil {
+		t.Fatal("ResolveModel of an unknown name returned nil error")
 	}
 }

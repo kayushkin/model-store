@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# One shared gate decides whether this tree may be deployed (main clone, default
+# branch, clean, pushed, not behind, and the same for every tree the build reads).
+# It lives in healthcheck/scripts/deploy-gate.sh. Do not inline or copy it.
+( cd "$(dirname "$0")" && "$HOME/bin/deploy-gate" check )
+
 # Builds the ms CLI (which now carries the `serve` subcommand), installs it as
 # both ~/bin/ms and ~/bin/model-store, syncs the systemd unit, restarts the
 # service, and smoke-checks the HTTP surface.
@@ -40,3 +45,6 @@ curl -sfS http://localhost:8155/api/health >/dev/null
 # 2026-04-06 binary did not serve.
 curl -sfS http://localhost:8155/api/models | grep -q '"short_name"'
 echo "==> deployed: :8155 serving /api/models with short_name"
+
+# Last act: write this deploy to repo-store's ledger, so the next agent sees what is live.
+( cd "$(dirname "$0")" && "$HOME/bin/deploy-gate" record )

@@ -32,6 +32,7 @@ ms priority claude-opus-4-6 3 # set failover priority (lower = preferred)
 ms shortname claude-opus-4-6 opus-4.6  # set the short display nickname
 ms alias add gpt-5 fast       # point an alias at a model
 ms alias rm fast              # remove an alias
+ms add openai gpt-6-sol --name GPT-6-Sol --max-tokens 272000  # add a model sync cannot see
 ms delete gpt-4o              # delete a model and its aliases
 ```
 

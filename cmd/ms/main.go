@@ -251,6 +251,66 @@ Requires API keys via environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, 
 		},
 	})
 
+	// add
+	var addName, addShortName string
+	var addMaxTokens, addPriority int
+	var addInputCost, addOutputCost float64
+	addCmd := &cobra.Command{
+		Use:   "add <provider> <model>",
+		Short: "Add a model that sync cannot see (e.g. one only a subscription exposes)",
+		Long: "Add a model by its exact provider id. Refuses an id or alias that already\n" +
+			"exists, so it never overwrites a row's user-set fields. Costs default to 0:\n" +
+			"leave them unset when no published price exists.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			providerID, modelID := args[0], args[1]
+			store, err := ms.Open("")
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			providers, err := store.Providers()
+			if err != nil {
+				return err
+			}
+			providerExists := false
+			for _, p := range providers {
+				if p.ID == providerID {
+					providerExists = true
+					break
+				}
+			}
+			if !providerExists {
+				return fmt.Errorf("provider %q not found; see `ms providers`", providerID)
+			}
+			if existing, err := store.ResolveModel(modelID); err == nil {
+				return fmt.Errorf("%q already resolves to model %q", modelID, existing.ID)
+			}
+
+			name := addName
+			if name == "" {
+				name = modelID
+			}
+			if err := store.AddModel(ms.Model{
+				ID: modelID, Provider: providerID, Name: name, ShortName: addShortName,
+				MaxTokens: addMaxTokens, InputCost: addInputCost, OutputCost: addOutputCost,
+				Enabled: true, Priority: addPriority,
+			}); err != nil {
+				return err
+			}
+			fmt.Printf("Added %s (%s)\n", modelID, providerID)
+			return nil
+		},
+	}
+	addCmd.Flags().StringVar(&addName, "name", "", "display name (default: the model id)")
+	addCmd.Flags().StringVar(&addShortName, "short-name", "", "short display nickname")
+	addCmd.Flags().IntVar(&addMaxTokens, "max-tokens", 0, "context window in tokens")
+	addCmd.Flags().IntVar(&addPriority, "priority", 100, "failover priority (lower = preferred)")
+	addCmd.Flags().Float64Var(&addInputCost, "input-cost", 0, "input cost per million tokens")
+	addCmd.Flags().Float64Var(&addOutputCost, "output-cost", 0, "output cost per million tokens")
+	root.AddCommand(addCmd)
+
 	// priority
 	root.AddCommand(&cobra.Command{
 		Use:   "priority <model> <n>",

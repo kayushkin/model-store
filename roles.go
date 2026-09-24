@@ -14,7 +14,9 @@ import (
 // truth rather than being reinvented per caller.
 //
 //   best      — highest performance, cost no object
-//   default   — the everyday model: much cheaper than best, better than efficient
+//   default   — the everyday model: much cheaper than best, better than balanced
+//   balanced  — between default and efficient: judgement that runs at volume,
+//               where efficient answers too carelessly (merging duplicate cards)
 //   efficient — cheap enough to run at volume (titles, classification, polling)
 //
 // The set is fixed and defined ONCE here. Nothing else may carry its own copy;
@@ -23,12 +25,14 @@ import (
 const (
 	RoleBest      = "best"
 	RoleDefault   = "default"
+	RoleBalanced  = "balanced"
 	RoleEfficient = "efficient"
 )
 
 // CanonicalRoles is the single definition of the valid role set. Iterate this
-// rather than hardcoding the three names anywhere else.
-var CanonicalRoles = []string{RoleBest, RoleDefault, RoleEfficient}
+// rather than hardcoding the names anywhere else. Ordered from most to least
+// capable.
+var CanonicalRoles = []string{RoleBest, RoleDefault, RoleBalanced, RoleEfficient}
 
 // ErrUnknownRole is returned when a role name is not in CanonicalRoles.
 var ErrUnknownRole = errors.New("unknown role")

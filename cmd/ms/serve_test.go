@@ -134,8 +134,8 @@ func TestServeRolesGetSetResolve(t *testing.T) {
 	if listed.Roles["default"] != "claude-fable-5-1" {
 		t.Fatalf("default role = %q, want claude-fable-5-1", listed.Roles["default"])
 	}
-	if len(listed.Canonical) != 3 {
-		t.Fatalf("canonical roles = %v, want 3", listed.Canonical)
+	if len(listed.Canonical) != len(ms.CanonicalRoles) {
+		t.Fatalf("canonical roles = %v, want %v", listed.Canonical, ms.CanonicalRoles)
 	}
 
 	// GET /api/roles/{role} resolves to the full model.

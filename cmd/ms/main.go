@@ -394,10 +394,10 @@ Requires API keys via environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, 
 	})
 	root.AddCommand(aliasCmd)
 
-	// role: purpose-named pointers (best / default / efficient) into the registry
+	// role: purpose-named pointers (best / default / balanced / efficient) into the registry
 	roleCmd := &cobra.Command{
 		Use:   "role",
-		Short: "Manage model roles (best / default / efficient)",
+		Short: "Manage model roles (best / default / balanced / efficient)",
 	}
 	roleCmd.AddCommand(&cobra.Command{
 		Use:   "list",

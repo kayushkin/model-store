@@ -9,6 +9,9 @@ func (s *Store) Seed() error {
 		{ID: "google", Name: "Google"},
 		{ID: "ollama", Name: "Ollama (local)"},
 		{ID: "openrouter", Name: "OpenRouter"},
+		// Databricks has no fixed model list: each workspace serves its own
+		// endpoints, so its models are added one by one as endpoints are named.
+		{ID: "databricks", Name: "Databricks"},
 	}
 
 	for _, p := range providers {

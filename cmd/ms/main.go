@@ -20,7 +20,7 @@ func main() {
 	root.AddCommand(newServeCommand())
 
 	// providers
-	root.AddCommand(&cobra.Command{
+	providersCommand := &cobra.Command{
 		Use:   "providers",
 		Short: "List configured providers",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -42,7 +42,28 @@ func main() {
 			}
 			return nil
 		},
+	}
+	providersCommand.AddCommand(&cobra.Command{
+		Use:   "add <id> <name>",
+		Short: "Register one provider, leaving every other row as it is",
+		Long: `Registers one provider without re-running seed, which rewrites every seeded
+model row. Registering an existing id replaces its name.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := ms.Open("")
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+
+			if err := store.AddProvider(ms.Provider{ID: args[0], Name: args[1]}); err != nil {
+				return err
+			}
+			fmt.Printf("Registered provider %s (%s).\n", args[0], args[1])
+			return nil
+		},
 	})
+	root.AddCommand(providersCommand)
 
 	// models
 	root.AddCommand(&cobra.Command{

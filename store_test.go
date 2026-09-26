@@ -558,23 +558,34 @@ func TestFreshDB(t *testing.T) {
 // landing in the same second compared equal — not after — and a model that had
 // just failed kept reporting healthy. Recording back-to-back, as here, is the
 // ordinary case for an error that fails fast (400, 404, an instant refusal).
+//
+// The two calls straddle a second boundary about 1 run in 500 (measured
+// 2026-08-31: 10 in 5000). A skip then would read as a pass everywhere, so each
+// attempt uses a fresh store and the test retries until the pair shares a
+// second. Every attempt missing the precondition is a failure, not a skip.
 func TestAnErrorInTheSameSecondAsASuccessStillMarksTheModelUnhealthy(t *testing.T) {
-	s := tempStore(t)
-	seedProviderWithModels(t, s, "anthropic",
-		Model{ID: "m", Provider: "anthropic", Name: "M", Enabled: true, Priority: 10},
-	)
+	const attempts = 5
+	var h *ModelHealth
+	for attempt := 1; ; attempt++ {
+		s := tempStore(t)
+		seedProviderWithModels(t, s, "anthropic",
+			Model{ID: "m", Provider: "anthropic", Name: "M", Enabled: true, Priority: 10},
+		)
 
-	s.RecordSuccess("m", 100)
-	s.RecordError("m", "529 overloaded")
+		s.RecordSuccess("m", 100)
+		s.RecordError("m", "529 overloaded")
 
-	h := s.GetHealth("m")
+		h = s.GetHealth("m")
 
-	// The precondition the bug needed. If these ever differ the test has stopped
-	// exercising the same-second case and must be rewritten, not deleted.
-	if !h.LastErrorAt.Equal(h.LastSuccessAt) {
-		t.Skipf("success and error did not land in the same second (%s vs %s); "+
-			"the same-second case is not being exercised",
-			h.LastSuccessAt, h.LastErrorAt)
+		// The precondition the bug needed.
+		if h.LastErrorAt.Equal(h.LastSuccessAt) {
+			break
+		}
+		if attempt == attempts {
+			t.Fatalf("success and error did not land in the same second in %d attempts "+
+				"(last: %s vs %s); the same-second case is not being exercised",
+				attempts, h.LastSuccessAt, h.LastErrorAt)
+		}
 	}
 
 	if h.IsHealthy(24 * time.Hour) {

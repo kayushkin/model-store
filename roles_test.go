@@ -178,3 +178,87 @@ func TestResolveModelUnknownNameStillErrors(t *testing.T) {
 		t.Fatal("ResolveModel of an unknown name returned nil error")
 	}
 }
+
+func addThirdModel(t *testing.T, s *Store) {
+	t.Helper()
+	if err := s.AddModel(Model{ID: "gpt-5.6-terra", Provider: "openai", Name: "Terra", MaxTokens: 400000, Enabled: true}); err != nil {
+		t.Fatalf("seed terra: %v", err)
+	}
+}
+
+func TestSetRoleModelsKeepsOrder(t *testing.T) {
+	s := newTestStore(t)
+	addThirdModel(t, s)
+	want := []string{"gpt-5.6-terra", "claude-fable-5-1", "gpt-5.6-luna"}
+	if err := s.SetRoleModels(RoleBalanced, want); err != nil {
+		t.Fatalf("SetRoleModels: %v", err)
+	}
+	got, err := s.RoleModelIDs(RoleBalanced)
+	if err != nil {
+		t.Fatalf("RoleModelIDs: %v", err)
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("list = %v, want %v", got, want)
+	}
+	// A reader that knows only the first model still gets it.
+	first, err := s.ResolveRole(RoleBalanced)
+	if err != nil || first.ID != "gpt-5.6-terra" {
+		t.Fatalf("ResolveRole = %v, %v; want gpt-5.6-terra", first, err)
+	}
+	models, err := s.RoleModels(RoleBalanced)
+	if err != nil || len(models) != 3 || models[2].Provider != "openai" {
+		t.Fatalf("RoleModels = %v, %v", models, err)
+	}
+}
+
+func TestSetRoleModelsRefusesBadLists(t *testing.T) {
+	s := newTestStore(t)
+	for name, list := range map[string][]string{
+		"empty":         {},
+		"duplicate":     {"gpt-5.6-luna", "gpt-5.6-luna"},
+		"unknown model": {"gpt-5.6-luna", "claude-imaginary-9"},
+	} {
+		if err := s.SetRoleModels(RoleEfficient, list); err == nil {
+			t.Errorf("%s list accepted; want refusal", name)
+		}
+	}
+	if err := s.SetRoleModels("budget", []string{"gpt-5.6-luna"}); err == nil {
+		t.Error("unknown role accepted; want refusal")
+	}
+	// A refused list leaves nothing half-written.
+	if _, err := s.RoleModelIDs(RoleEfficient); err == nil {
+		t.Error("a refused list left the role assigned")
+	}
+}
+
+func TestSetRoleKeepsFallbacksAndDropsTheNewFirstFromThem(t *testing.T) {
+	s := newTestStore(t)
+	addThirdModel(t, s)
+	if err := s.SetRoleModels(RoleDefault, []string{"claude-fable-5-1", "gpt-5.6-terra", "gpt-5.6-luna"}); err != nil {
+		t.Fatalf("SetRoleModels: %v", err)
+	}
+	if err := s.SetRole(RoleDefault, "gpt-5.6-terra"); err != nil {
+		t.Fatalf("SetRole: %v", err)
+	}
+	got, _ := s.RoleModelIDs(RoleDefault)
+	if strings.Join(got, ",") != "gpt-5.6-terra,gpt-5.6-luna" {
+		t.Fatalf("list after SetRole = %v, want [gpt-5.6-terra gpt-5.6-luna]", got)
+	}
+}
+
+func TestRemoveRoleClearsFallbacks(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SetRoleModels(RoleBest, []string{"claude-fable-5-1", "gpt-5.6-luna"}); err != nil {
+		t.Fatalf("SetRoleModels: %v", err)
+	}
+	if err := s.RemoveRole(RoleBest); err != nil {
+		t.Fatalf("RemoveRole: %v", err)
+	}
+	if err := s.SetRole(RoleBest, "gpt-5.6-luna"); err != nil {
+		t.Fatalf("SetRole: %v", err)
+	}
+	got, _ := s.RoleModelIDs(RoleBest)
+	if strings.Join(got, ",") != "gpt-5.6-luna" {
+		t.Fatalf("list = %v; a removed role kept its old fallbacks", got)
+	}
+}

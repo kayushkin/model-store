@@ -19,6 +19,11 @@ import (
 //               where efficient answers too carelessly (merging duplicate cards)
 //   efficient — cheap enough to run at volume (titles, classification, polling)
 //
+// A role holds an ordered list of models: the first is the one callers use,
+// and the rest are the fallbacks a caller tries, in order, when a call to the
+// one before fails. model_roles keeps the first model, so a reader that knows
+// only ResolveRole keeps working; model_role_fallbacks keeps the rest.
+//
 // The set is fixed and defined ONCE here. Nothing else may carry its own copy;
 // a role outside this set is rejected at write time so a typo cannot create a
 // silent fourth role that nothing resolves.
@@ -68,33 +73,155 @@ func (s *Store) Roles() (map[string]string, error) {
 	return out, rows.Err()
 }
 
-// SetRole points a role at a model. The role must be canonical and the model
-// must already exist in the registry — a role can only ever name a real model,
-// never a free-text string, so it cannot drift out of sync with the models
-// table the way a hardcoded default in a caller does.
+// SetRole makes modelID the first model of a role and keeps the role's
+// fallbacks. The role must be canonical and the model must already exist in the
+// registry — a role can only ever name a real model, never a free-text string,
+// so it cannot drift out of sync with the models table the way a hardcoded
+// default in a caller does. A fallback equal to the new first model is dropped,
+// since a list that names one model twice would retry it.
 func (s *Store) SetRole(role, modelID string) error {
+	models, err := s.RoleModelIDs(role)
+	if err != nil && !errors.Is(err, errRoleNotAssigned) {
+		return err
+	}
+	list := []string{modelID}
+	for i, id := range models {
+		if i == 0 || id == modelID {
+			continue
+		}
+		list = append(list, id)
+	}
+	return s.SetRoleModels(role, list)
+}
+
+// SetRoleModels replaces a role's whole list: modelIDs[0] is the model callers
+// use and the rest are its fallbacks, in the order to try them. The list must
+// name at least one model, every model must exist, and none may appear twice.
+func (s *Store) SetRoleModels(role string, modelIDs []string) error {
 	if !IsCanonicalRole(role) {
 		return fmt.Errorf("%w: %q (valid roles: %v)", ErrUnknownRole, role, CanonicalRoles)
 	}
-	var exists string
-	err := s.db.QueryRow(`SELECT id FROM models WHERE id = ?`, modelID).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("cannot point role %q at unknown model %q", role, modelID)
+	if len(modelIDs) == 0 {
+		return fmt.Errorf("role %q needs at least one model; use RemoveRole to clear it", role)
 	}
+	seen := make(map[string]bool, len(modelIDs))
+	for _, id := range modelIDs {
+		if seen[id] {
+			return fmt.Errorf("role %q names model %q twice", role, id)
+		}
+		seen[id] = true
+		var exists string
+		err := s.db.QueryRow(`SELECT id FROM models WHERE id = ?`, id).Scan(&exists)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("cannot point role %q at unknown model %q", role, id)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(
+	defer tx.Rollback()
+	if _, err := tx.Exec(
 		`INSERT INTO model_roles (role, model_id) VALUES (?, ?)
 		 ON CONFLICT(role) DO UPDATE SET model_id = excluded.model_id`,
-		role, modelID,
-	)
-	return err
+		role, modelIDs[0],
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM model_role_fallbacks WHERE role = ?`, role); err != nil {
+		return err
+	}
+	for position, id := range modelIDs[1:] {
+		if _, err := tx.Exec(
+			`INSERT INTO model_role_fallbacks (role, position, model_id) VALUES (?, ?, ?)`,
+			role, position+1, id,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+var errRoleNotAssigned = errors.New("role is not assigned")
+
+// RoleModelIDs returns a role's models in the order to try them: the first
+// model, then each fallback. It fails on an unknown role and on one with no
+// assignment, as ResolveRole does.
+func (s *Store) RoleModelIDs(role string) ([]string, error) {
+	if !IsCanonicalRole(role) {
+		return nil, fmt.Errorf("%w: %q (valid roles: %v)", ErrUnknownRole, role, CanonicalRoles)
+	}
+	var first string
+	err := s.db.QueryRow(`SELECT model_id FROM model_roles WHERE role = ?`, role).Scan(&first)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %q", errRoleNotAssigned, role)
+	}
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(`SELECT model_id FROM model_role_fallbacks WHERE role = ? ORDER BY position`, role)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{first}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// RoleModels resolves every model in a role's list, in the order to try them.
+func (s *Store) RoleModels(role string) ([]*Model, error) {
+	ids, err := s.RoleModelIDs(role)
+	if err != nil {
+		return nil, err
+	}
+	models := make([]*Model, 0, len(ids))
+	for _, id := range ids {
+		m, err := s.ResolveModel(id)
+		if err != nil {
+			return nil, fmt.Errorf("role %q: %w", role, err)
+		}
+		models = append(models, m)
+	}
+	return models, nil
+}
+
+// RoleModelLists returns every assigned role's list of model ids, first model
+// first. An unassigned role is absent, as in Roles.
+func (s *Store) RoleModelLists() (map[string][]string, error) {
+	roles, err := s.Roles()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]string, len(roles))
+	for role := range roles {
+		if !IsCanonicalRole(role) {
+			continue
+		}
+		ids, err := s.RoleModelIDs(role)
+		if err != nil {
+			return nil, err
+		}
+		out[role] = ids
+	}
+	return out, nil
 }
 
 // RemoveRole clears a role assignment. Removing a role that is not set is not an
 // error — the desired end state (no assignment) already holds.
 func (s *Store) RemoveRole(role string) error {
+	if _, err := s.db.Exec(`DELETE FROM model_role_fallbacks WHERE role = ?`, role); err != nil {
+		return err
+	}
 	_, err := s.db.Exec(`DELETE FROM model_roles WHERE role = ?`, role)
 	return err
 }
@@ -110,7 +237,7 @@ func (s *Store) ResolveRole(role string) (*Model, error) {
 	var modelID string
 	err := s.db.QueryRow(`SELECT model_id FROM model_roles WHERE role = ?`, role).Scan(&modelID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("role %q is not assigned", role)
+		return nil, fmt.Errorf("%w: %q", errRoleNotAssigned, role)
 	}
 	if err != nil {
 		return nil, err

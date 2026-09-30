@@ -93,10 +93,17 @@ func newServeHandler(store *ms.Store) http.Handler {
 		jsonResponse(w, map[string]any{"ok": true, "model": req.Model, "enabled": req.Enabled})
 	})
 
-	// GET /api/roles          → {"best":"claude-fable-5-1", ...} plus the
+	// GET /api/roles          → {"roles":{"best":"claude-fable-5-1",…}} (each
+	//                            role's first model), "models" (each role's
+	//                            whole list, first model first) and the
 	//                            canonical role set so a client never invents it.
-	// GET /api/roles/{role}    → the fully resolved Model for that role.
-	// POST /api/roles          → {"role":"efficient","model":"gpt-5.6-luna"} sets it.
+	// GET /api/roles/{role}    → the fully resolved first Model for that role.
+	// GET /api/roles/{role}/models → every Model in the role's list, in the
+	//                            order to try them.
+	// POST /api/roles          → {"role":"efficient","model":"gpt-5.6-luna"}
+	//                            makes that the first model and keeps the
+	//                            fallbacks; {"role":…,"models":[…]} replaces
+	//                            the whole list. Sending both is a 400.
 	mux.HandleFunc("/api/roles", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -105,21 +112,47 @@ func newServeHandler(store *ms.Store) http.Handler {
 				httpError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			jsonResponse(w, map[string]any{"roles": roles, "canonical": ms.CanonicalRoles})
-		case http.MethodPost:
-			var req struct {
-				Role  string `json:"role"`
-				Model string `json:"model"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				httpError(w, "invalid body", http.StatusBadRequest)
+			lists, err := store.RoleModelLists()
+			if err != nil {
+				httpError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			if err := store.SetRole(req.Role, req.Model); err != nil {
+			jsonResponse(w, map[string]any{"roles": roles, "models": lists, "canonical": ms.CanonicalRoles})
+		case http.MethodPost:
+			var req struct {
+				Role   string   `json:"role"`
+				Model  string   `json:"model"`
+				Models []string `json:"models"`
+			}
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&req); err != nil {
+				httpError(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			var err error
+			switch {
+			case req.Model != "" && req.Models != nil:
+				httpError(w, `send "model" or "models", not both`, http.StatusBadRequest)
+				return
+			case req.Models != nil:
+				err = store.SetRoleModels(req.Role, req.Models)
+			case req.Model != "":
+				err = store.SetRole(req.Role, req.Model)
+			default:
+				httpError(w, `"model" or "models" is required`, http.StatusBadRequest)
+				return
+			}
+			if err != nil {
 				httpError(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			jsonResponse(w, map[string]any{"ok": true, "role": req.Role, "model": req.Model})
+			list, err := store.RoleModelIDs(req.Role)
+			if err != nil {
+				httpError(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			jsonResponse(w, map[string]any{"ok": true, "role": req.Role, "model": list[0], "models": list})
 		default:
 			httpError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -133,6 +166,15 @@ func newServeHandler(store *ms.Store) http.Handler {
 		role := strings.TrimPrefix(r.URL.Path, "/api/roles/")
 		if role == "" {
 			httpError(w, "role required", http.StatusBadRequest)
+			return
+		}
+		if listedRole, ok := strings.CutSuffix(role, "/models"); ok {
+			models, err := store.RoleModels(listedRole)
+			if err != nil {
+				httpError(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			jsonResponse(w, models)
 			return
 		}
 		m, err := store.ResolveRole(role)

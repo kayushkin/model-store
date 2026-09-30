@@ -107,6 +107,14 @@ func (s *Store) migrate() error {
 			role TEXT PRIMARY KEY,
 			model_id TEXT NOT NULL REFERENCES models(id)
 		);
+
+		CREATE TABLE IF NOT EXISTS model_role_fallbacks (
+			role TEXT NOT NULL REFERENCES model_roles(role),
+			position INTEGER NOT NULL,
+			model_id TEXT NOT NULL REFERENCES models(id),
+			PRIMARY KEY (role, position),
+			UNIQUE (role, model_id)
+		);
 	`)
 	if err != nil {
 		return err

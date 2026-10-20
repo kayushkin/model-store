@@ -436,9 +436,9 @@ Requires API keys via environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, 
 			}
 			for _, r := range ms.CanonicalRoles {
 				if id, ok := roles[r]; ok {
-					fmt.Printf("%-10s -> %s\n", r, id)
+					fmt.Printf("%-15s -> %s\n", r, id)
 				} else {
-					fmt.Printf("%-10s -> (unassigned)\n", r)
+					fmt.Printf("%-15s -> (unassigned)\n", r)
 				}
 			}
 			return nil

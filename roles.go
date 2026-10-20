@@ -19,6 +19,15 @@ import (
 //               where efficient answers too carelessly (merging duplicate cards)
 //   efficient — cheap enough to run at volume (titles, classification, polling)
 //
+// A role may also name ONE job whose model an eval-store run chose, when no
+// tier fits it and moving a tier would move every other caller of that tier:
+//
+//   turn-end-signal — llm-bridge-server's turn-end classifier, which turns a
+//               finished turn's last message into question cards. Chosen by
+//               eval-store eval_run_000010 (claude-haiku-5-5 accepted on 12 of
+//               13 cases, gpt-5.6-terra on 10), while terra stays first in
+//               balanced for the classification jobs it did better at.
+//
 // A role holds an ordered list of models: the first is the one callers use,
 // and the rest are the fallbacks a caller tries, in order, when a call to the
 // one before fails. model_roles keeps the first model, so a reader that knows
@@ -32,12 +41,14 @@ const (
 	RoleDefault   = "default"
 	RoleBalanced  = "balanced"
 	RoleEfficient = "efficient"
+
+	RoleTurnEndSignal = "turn-end-signal"
 )
 
 // CanonicalRoles is the single definition of the valid role set. Iterate this
-// rather than hardcoding the names anywhere else. Ordered from most to least
-// capable.
-var CanonicalRoles = []string{RoleBest, RoleDefault, RoleBalanced, RoleEfficient}
+// rather than hardcoding the names anywhere else. The tiers come first, from
+// most to least capable, then the roles that name one job.
+var CanonicalRoles = []string{RoleBest, RoleDefault, RoleBalanced, RoleEfficient, RoleTurnEndSignal}
 
 // ErrUnknownRole is returned when a role name is not in CanonicalRoles.
 var ErrUnknownRole = errors.New("unknown role")

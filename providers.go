@@ -96,7 +96,7 @@ func (s *Store) Models(provider string) ([]Model, error) {
 // ResolveModel resolves a model ID, alias, or canonical role to a full Model.
 //
 // Lookup order is id, then alias, then role. Roles are checked LAST on purpose:
-// the role set is fixed to three names (CanonicalRoles), so a collision with a
+// the role set is fixed (CanonicalRoles), so a collision with a
 // real id or alias is unlikely, but if one ever exists the concrete id/alias
 // wins and the role is never consulted — a caller that names a real row gets
 // that row, not a pointer to something else.

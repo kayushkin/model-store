@@ -15,7 +15,7 @@ import (
 //
 //   best      — highest performance, cost no object
 //   default   — the everyday model: much cheaper than best, better than balanced
-//   balanced  — between default and efficient: judgement that runs at volume,
+//   balanced  — between default and efficient: judgment that runs at volume,
 //               where efficient answers too carelessly (merging duplicate cards)
 //   efficient — cheap enough to run at volume (titles, classification, polling)
 //

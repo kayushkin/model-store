@@ -12,7 +12,7 @@ import (
 // a short name, a priority and an enabled flag that a person set are all gone
 // after a second Seed.
 //
-// This test asserts the CURRENT behaviour, which is a fault the comment warns
+// This test asserts the CURRENT behavior, which is a fault the comment warns
 // about rather than one it defends. If Seed is ever made non-destructive — the
 // obvious repair is to read the existing row and call adoptUserSetFieldsFrom, the
 // way every provider sync does — this test is what tells whoever does it to
@@ -54,7 +54,7 @@ func TestSeedRerunResetsEveryUserSetField(t *testing.T) {
 	}
 	if after.ShortName == "mine" || after.Priority == 1 || !after.Enabled {
 		t.Errorf("Seed no longer overwrites user-set fields — good, but its doc comment still "+
-			"says it does. Update the comment on Seed in the same change as the behaviour.\n"+
+			"says it does. Update the comment on Seed in the same change as the behavior.\n"+
 			"got %+v", after)
 	}
 }

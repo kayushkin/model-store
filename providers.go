@@ -209,7 +209,7 @@ func (s *Store) AllModelsWithStatus() ([]ModelStatus, error) {
 	// aliases:null for every row — the `best` pointer and every nickname were
 	// invisible to any consumer reading /api/models, which is the entire reason
 	// callers reinvented their own default resolution. Done after the rows loop
-	// because sqlite serialises one connection's queries: iterating the outer
+	// because sqlite serializes one connection's queries: iterating the outer
 	// rows while opening an inner query on the same *sql.DB deadlocks.
 	for i := range result {
 		aliasRows, err := s.db.Query(`SELECT alias FROM model_aliases WHERE model_id = ?`, result[i].ID)

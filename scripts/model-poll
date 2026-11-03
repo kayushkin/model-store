@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # model-poll — daily model-store autopilot.
 #
-# Runs `ms sync openai anthropic` (upserts the live provider catalogues,
+# Runs `ms sync openai anthropic` (upserts the live provider catalogs,
 # preserving user-set fields and only ADDING genuinely new models at priority
 # 100 with estimated costs), then:
 #

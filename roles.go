@@ -28,6 +28,16 @@ import (
 //               13 cases, gpt-5.6-terra on 10), while terra stays first in
 //               balanced for the classification jobs it did better at.
 //
+// A role may also name a job whose model the operator chose by name:
+//
+//   possession-photo-reader, possession-photo-second-reader — the two models
+//               possession-store asks, each on its own and then each shown
+//               the other's answer, what possessions a photo shows. The
+//               operator chose claude-opus-5-5 and gpt-6-astra on 2026-11-06
+//               so that two different makers' models must agree. Each holds
+//               one model and no fallback: a reader that cannot answer stops
+//               the review rather than let a third model stand in.
+//
 // A role holds an ordered list of models: the first is the one callers use,
 // and the rest are the fallbacks a caller tries, in order, when a call to the
 // one before fails. model_roles keeps the first model, so a reader that knows
@@ -43,12 +53,15 @@ const (
 	RoleEfficient = "efficient"
 
 	RoleTurnEndSignal = "turn-end-signal"
+
+	RolePossessionPhotoReader       = "possession-photo-reader"
+	RolePossessionPhotoSecondReader = "possession-photo-second-reader"
 )
 
 // CanonicalRoles is the single definition of the valid role set. Iterate this
 // rather than hardcoding the names anywhere else. The tiers come first, from
 // most to least capable, then the roles that name one job.
-var CanonicalRoles = []string{RoleBest, RoleDefault, RoleBalanced, RoleEfficient, RoleTurnEndSignal}
+var CanonicalRoles = []string{RoleBest, RoleDefault, RoleBalanced, RoleEfficient, RoleTurnEndSignal, RolePossessionPhotoReader, RolePossessionPhotoSecondReader}
 
 // ErrUnknownRole is returned when a role name is not in CanonicalRoles.
 var ErrUnknownRole = errors.New("unknown role")

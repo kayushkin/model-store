@@ -13,30 +13,36 @@ import (
 // which is the whole reason the resolution lives here in the one source of
 // truth rather than being reinvented per caller.
 //
-//   best      — highest performance, cost no object
-//   default   — the everyday model: much cheaper than best, better than balanced
-//   balanced  — between default and efficient: judgment that runs at volume,
-//               where efficient answers too carelessly (merging duplicate cards)
-//   efficient — cheap enough to run at volume (titles, classification, polling)
+//	best      — highest performance, cost no object
+//	default   — the everyday model: much cheaper than best, better than balanced
+//	balanced  — between default and efficient: judgment that runs at volume,
+//	            where efficient answers too carelessly (merging duplicate cards)
+//	efficient — cheap enough to run at volume (titles, classification, polling)
 //
 // A role may also name ONE job whose model an eval-store run chose, when no
 // tier fits it and moving a tier would move every other caller of that tier:
 //
-//   turn-end-signal — llm-bridge-server's turn-end classifier, which turns a
-//               finished turn's last message into question cards. Chosen by
-//               eval-store eval_run_000010 (claude-haiku-5-5 accepted on 12 of
-//               13 cases, gpt-5.6-terra on 10), while terra stays first in
-//               balanced for the classification jobs it did better at.
+//	turn-end-signal — llm-bridge-server's turn-end classifier, which turns a
+//	            finished turn's last message into question cards. Chosen by
+//	            eval-store eval_run_000010 (claude-haiku-5-5 accepted on 12 of
+//	            13 cases, gpt-5.6-terra on 10), while terra stays first in
+//	            balanced for the classification jobs it did better at.
 //
 // A role may also name a job whose model the operator chose by name:
 //
-//   possession-photo-reader, possession-photo-second-reader — the two models
-//               possession-store asks, each on its own and then each shown
-//               the other's answer, what possessions a photo shows. The
-//               operator chose claude-opus-5-5 and gpt-6-astra on 2026-11-06
-//               so that two different makers' models must agree. Each holds
-//               one model and no fallback: a reader that cannot answer stops
-//               the review rather than let a third model stand in.
+//	possession-photo-reader, possession-photo-second-reader — the two models
+//	            possession-store asks, each on its own and then each shown
+//	            the other's answer, what possessions a photo shows. The
+//	            operator chose claude-opus-5-5 and gpt-6-astra on 2026-11-06
+//	            so that two different makers' models must agree. Each holds
+//	            one model and no fallback: a reader that cannot answer stops
+//	            the review rather than let a third model stand in.
+//
+//	time-entry-reviewer — the model time-ledger-store asks, for each time
+//	            entry with its sources and evidence, whether the operator did
+//	            it. The operator chose claude-opus-5-5 by name on 2026-11-07.
+//	            It holds one model and no fallback: a review another model
+//	            wrote would be signed with a name the operator did not pick.
 //
 // A role holds an ordered list of models: the first is the one callers use,
 // and the rest are the fallbacks a caller tries, in order, when a call to the
@@ -56,12 +62,14 @@ const (
 
 	RolePossessionPhotoReader       = "possession-photo-reader"
 	RolePossessionPhotoSecondReader = "possession-photo-second-reader"
+
+	RoleTimeEntryReviewer = "time-entry-reviewer"
 )
 
 // CanonicalRoles is the single definition of the valid role set. Iterate this
 // rather than hardcoding the names anywhere else. The tiers come first, from
 // most to least capable, then the roles that name one job.
-var CanonicalRoles = []string{RoleBest, RoleDefault, RoleBalanced, RoleEfficient, RoleTurnEndSignal, RolePossessionPhotoReader, RolePossessionPhotoSecondReader}
+var CanonicalRoles = []string{RoleBest, RoleDefault, RoleBalanced, RoleEfficient, RoleTurnEndSignal, RolePossessionPhotoReader, RolePossessionPhotoSecondReader, RoleTimeEntryReviewer}
 
 // ErrUnknownRole is returned when a role name is not in CanonicalRoles.
 var ErrUnknownRole = errors.New("unknown role")

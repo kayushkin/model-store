@@ -30,6 +30,9 @@ install -m 0755 /tmp/model-store-deploy-build "$HOME/bin/ms"
 install -m 0755 /tmp/model-store-deploy-build "$HOME/bin/model-store"
 rm /tmp/model-store-deploy-build
 
+echo "==> installing ~/bin/model-poll (scheduler job 37 runs it daily)"
+install -m 0755 scripts/model-poll "$HOME/bin/model-poll"
+
 echo "==> syncing systemd unit"
 install -m 0644 model-store.service "$HOME/.config/systemd/user/model-store.service"
 systemctl --user daemon-reload

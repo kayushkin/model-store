@@ -169,24 +169,36 @@ type openaiModel struct {
 
 // openaiRelevant filters to chat/reasoning models useful for coding agents.
 // Excludes audio, realtime, transcribe, tts, search, fine-tuned, and legacy snapshot variants.
+//
+// A family is matched by its shape, not by a list of versions: "gpt-" followed
+// by a version number, "o" followed by one, or "chatgpt-". A list of versions
+// ("gpt-4", "gpt-5") went stale the day gpt-6 shipped and dropped every gpt-6
+// id the API returned without a word. The shape also keeps out the non-chat
+// "gpt-" lines (gpt-image, gpt-audio, gpt-realtime, gpt-live, gpt-transcribe),
+// whose next word is not a number.
 func openaiRelevant(id string) bool {
-	// Exclude non-chat models
 	for _, exclude := range []string{"audio", "realtime", "transcribe", "tts", "search", "diarize"} {
 		if strings.Contains(id, exclude) {
 			return false
 		}
 	}
-	// Exclude legacy GPT-3.5
 	if strings.HasPrefix(id, "gpt-3.5") {
 		return false
 	}
-	// Include known model families
-	for _, prefix := range []string{"gpt-4", "gpt-5", "o1", "o3", "o4", "chatgpt-"} {
-		if strings.HasPrefix(id, prefix) {
-			return true
-		}
+	if strings.HasPrefix(id, "chatgpt-") {
+		return true
+	}
+	if version, ok := strings.CutPrefix(id, "gpt-"); ok {
+		return startsWithDigit(version)
+	}
+	if version, ok := strings.CutPrefix(id, "o"); ok {
+		return startsWithDigit(version)
 	}
 	return false
+}
+
+func startsWithDigit(text string) bool {
+	return text != "" && text[0] >= '0' && text[0] <= '9'
 }
 
 func (s *Store) syncOpenAI(apiKey string) (*SyncResult, error) {

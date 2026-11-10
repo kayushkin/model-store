@@ -25,20 +25,25 @@
 # It does NOT touch the best/default/efficient roles: those live in model-store's
 # model_roles table and are set by the operator with `ms role set` (see step 3).
 #
-# Host-local: depends on ~/bin/ask (herald) and the repo `ms` CLI. This file is
-# the source; the installed copy is ~/bin/model-poll, run by scheduler job 37
-# (daily 06:00). Nothing in deploy.sh installs it — copy it there after editing.
+# Host-local: depends on ~/bin/ask (herald) and ~/bin/ms. This file is the
+# source; deploy.sh installs it as ~/bin/model-poll, which scheduler job 37 runs
+# daily at 06:00. It calls ~/bin/ms because deploy.sh builds that one: an `ms`
+# built by hand in the repo clone is never rebuilt and runs old sync code.
 set -uo pipefail
 
-MS=/home/kayushkincom/repos/model-store/ms
+MS="$HOME/bin/ms"
 STORE_API=http://localhost:8155/api/models
 OPENROUTER_API=https://openrouter.ai/api/v1/models
-ASK=/home/kayushkincom/bin/ask
-PREFS=/home/kayushkincom/.config/llm-bridge/bridge-prefs.json
+ASK="$HOME/bin/ask"
+PREFS="$HOME/.config/llm-bridge/bridge-prefs.json"
 
-snapshot() {  # "id<TAB>provider" per line, sorted
-  curl -sfS "$STORE_API" 2>/dev/null | python3 -c \
-    'import json,sys; print("\n".join(sorted(m["id"]+"\t"+m["provider"] for m in json.load(sys.stdin))))'
+snapshot() {  # "id<TAB>provider" per line, sorted the way comm compares
+  # Python's sort and comm's locale order disagree on "-" and ".", so comm
+  # warned "not in sorted order" and could miss a new model. Sort in the C
+  # locale and compare in it too.
+  curl -sfS "$STORE_API" | python3 -c \
+    'import json,sys; print("\n".join(m["id"]+"\t"+m["provider"] for m in json.load(sys.stdin)))' \
+    | LC_ALL=C sort
 }
 
 claude_default() {  # concrete model id used as the claude_code default
@@ -53,7 +58,7 @@ echo "[model-poll] syncing openai + anthropic..."
 after=$(snapshot)
 
 # Newly-present model ids (present after, absent before), split by provider.
-new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
+new=$(LC_ALL=C comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
 new_openai=$(printf '%s\n' "$new" | awk -F'\t' '$2=="openai"{print $1}' | grep -v '^$' || true)
 new_anthropic=$(printf '%s\n' "$new" | awk -F'\t' '$2=="anthropic"{print $1}' | grep -v '^$' || true)
 
@@ -150,13 +155,16 @@ PYEOF
 # ---------------------------------------------------------------------------
 if [ -n "${new_anthropic//[[:space:]]/}" ]; then
   echo "[model-poll] NEW Anthropic models (notify): $new_anthropic"
-  detail=$(curl -sfS "$STORE_API" 2>/dev/null | NEW="$new_anthropic" python3 -c '
-import json,os,sys
-new=set(os.environ["NEW"].split())
+  # The program goes in a quoted heredoc: inside a single-quoted -c string the
+  # f-string needed \" escapes, which Python rejects as a SyntaxError.
+  detail=$(curl -sfS "$STORE_API" | NEW="$new_anthropic" python3 -c "$(cat <<'PYEOF'
+import json, os, sys
+new = set(os.environ["NEW"].split())
 for m in json.load(sys.stdin):
     if m["id"] in new:
-        print(f"- {m[\"id\"]} ({m[\"provider\"]}) - est ${m[\"input_cost\"]}/${m[\"output_cost\"]} per MTok, priority {m[\"priority\"]}")
-')
+        print(f"- {m['id']} ({m['provider']}) - est ${m['input_cost']}/${m['output_cost']} per MTok, priority {m['priority']}")
+PYEOF
+)")
   cur_default=$(claude_default || echo "?")
   msg="model-poll found new Anthropic model(s) (auto-added at priority 100, estimated costs):
 
@@ -166,7 +174,7 @@ These run on your Claude Max subscription, so I did NOT change anything automati
 Want me to point the 'best' role at one of these (\`ms role set best <model>\`), make it the claude_code default, set its real cost/priority, or leave it in the failover chain as-is?"
   "$ASK" -from model-poll \
     -title "New Anthropic model(s) detected" \
-    -on-reply "Apply the user's choice with the repo ms CLI at /home/kayushkincom/repos/model-store/ms (cost/priority/enable/disable; \`ms role set best <model>\` to repoint the 'best' role) and, if they want a new default, set defaults.claude_code.model in ~/.config/llm-bridge/bridge-prefs.json to the concrete model id. Per the model-store reference note." \
+    -on-reply "Apply the user's choice with the ms CLI at ~/bin/ms (cost/priority/enable/disable; \`ms role set best <model>\` to repoint the 'best' role) and, if they want a new default, set defaults.claude_code.model in ~/.config/llm-bridge/bridge-prefs.json to the concrete model id. Per the model-store reference note." \
     "$msg" || echo "[model-poll] ask relay failed (non-fatal)"
 else
   echo "[model-poll] no new Anthropic models."
